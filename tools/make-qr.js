@@ -24,9 +24,19 @@ qr.make();
 var n = qr.getModuleCount(), cell = 10, margin = 4;
 var size = (n + margin * 2) * cell;
 
-var svg = ['<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size +
-           '" viewBox="0 0 ' + size + ' ' + size + '">',
-           '<rect width="' + size + '" height="' + size + '" fill="#ffffff"/>'];
+// Label band. Bare codes are indistinguishable from each other — several of
+// these live side by side and differ only in module pattern, which is exactly
+// how you end up scanning the wrong one. The title is printed underneath.
+var labelH = 64;
+var total = size + labelH;
+
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+var svg = ['<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + total +
+           '" viewBox="0 0 ' + size + ' ' + total + '">',
+           '<rect width="' + size + '" height="' + total + '" fill="#ffffff"/>'];
 for (var r = 0; r < n; r++) {
   for (var c = 0; c < n; c++) {
     if (qr.isDark(r, c)) {
@@ -35,8 +45,17 @@ for (var r = 0; r < n; r++) {
     }
   }
 }
+svg.push('<text x="' + (size / 2) + '" y="' + (size + 30) +
+         '" text-anchor="middle" font-family="monospace" font-size="30" ' +
+         'font-weight="bold" fill="#000000">' + esc(title) + "</text>");
+// Last path segment disambiguates /app/ from /bench/ from /probe/ at a glance.
+var tail = String(url).replace(/\/$/, "").split("/").slice(-1)[0];
+svg.push('<text x="' + (size / 2) + '" y="' + (size + 52) +
+         '" text-anchor="middle" font-family="monospace" font-size="20" ' +
+         'fill="#666666">/' + esc(tail) + "/</text>");
 svg.push("</svg>");
 
 fs.writeFileSync(out, svg.join(""));
-console.log("wrote " + out + "  " + size + "px  modules=" + n + "  payload=" + json.length + " bytes");
+console.log("wrote " + out + "  " + size + "x" + total + "px  modules=" + n +
+            "  payload=" + json.length + " bytes  label=" + title + " /" + tail + "/");
 console.log(json);
