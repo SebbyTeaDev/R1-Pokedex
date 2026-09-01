@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b8">
-<script>window.__BUILD = "b8";</script>
+<meta name="build" content="c1">
+<script>window.__BUILD = "c1";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -237,21 +237,11 @@
   <div id="v-home" class="view">
     <div class="mid">
       <div style="font-size:11px;color:var(--ink2);letter-spacing:.1em">STANDBY</div>
-      <div style="margin-top:3px;font-size:9px;color:var(--ink3)">press PTT to scan</div>
+      <div style="margin-top:3px;font-size:9px;color:var(--ink3)">press SCAN to listen</div>
       <div id="stats"></div>
     </div>
   </div>
 
-  <div id="v-cap" class="view">
-    <div class="mid">
-      <div id="specWrap">
-        <canvas id="spec" width="480" height="208"></canvas>
-        <span class="fl t">15k</span><span class="fl b">0Hz</span><span class="fl r">3s</span>
-      </div>
-      <div id="count">3.0</div>
-      <div id="capMsg">HOLD STILL</div>
-    </div>
-  </div>
 
   <div id="v-res" class="view">
     <div id="resWrap">
@@ -365,7 +355,7 @@ function bandOf(c) {
 
 var el = function (id) { return document.getElementById(id); };
 var worker = null, ready = false, busy = false, lastTrigger = 0, lastCommit = 0;
-var yam = null, yamOn = true, pendingPcm = null, birdVerdict = null;
+var yam = null, yamOn = true;
 var mode = 'single';        // 'monitor' routes results to the session list
 var YAM_KEY = 'pokedex_yam';
 var dex = {}, store = null, zip = null, nearby = null;
@@ -468,99 +458,6 @@ function withTimeout(p, ms, what) {
    FFT had already resolved was thrown away before it reached the glass.
    480 columns over 3 s is 160 per second; 208 rows over 0-15 kHz is ~72 Hz
    per row, which the 2048-point FFT below can actually fill. */
-var sctx = null, specX = 0, colImg = null;
-function specReset() {
-  var c = el('spec');
-  sctx = c.getContext('2d');
-  sctx.fillStyle = '#08080A'; sctx.fillRect(0, 0, c.width, c.height);
-  colImg = sctx.createImageData(1, c.height);
-  specX = 0;
-}
-/* Writes straight into an ImageData column. The old version issued one
-   fillRect per pixel with a formatted rgb() string — 208 style parses and
-   208 draw calls per column, ~100k across a capture, which the GE8320 will
-   not do at this resolution. */
-function specDrawTo(prog, data, maxBin) {
-  var c = el('spec'), H = c.height, W = c.width;
-  var target = Math.min(W - 1, (prog * W) | 0);
-  var px = colImg.data;
-  while (specX <= target) {
-    for (var y = 0; y < H; y++) {
-      var v = data[((1 - y / H) * maxBin) | 0] / 255;
-      v = v * v;                                  // square: suppress the floor
-      var r, g, b;
-      if (v < 0.5) { var a = v * 2; r = 13 + a*232 | 0; g = 13 + a*145 | 0; b = 15 - a*4 | 0; }
-      else { var t = (v - 0.5) * 2; r = 245; g = 158 + t*97 | 0; b = 11 + t*244 | 0; }
-      var o = y * 4;
-      px[o] = r; px[o+1] = g; px[o+2] = b; px[o+3] = 255;
-    }
-    sctx.putImageData(colImg, specX, 0);
-    specX++;
-  }
-}
-
-function capture(onProg) {
-  var stream = null, ctx = null, src = null, node = null, an = null, raf = 0;
-  function teardown() {
-    if (raf) { cancelAnimationFrame(raf); raf = 0; }
-    try { node && node.disconnect(); src && src.disconnect(); } catch (e) {}
-    try { ctx && ctx.close(); } catch (e) {}
-    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
-  }
-  return withTimeout(navigator.mediaDevices.getUserMedia({ audio:{
-      channelCount:1, sampleRate:RATE,
-      echoCancellation:false, noiseSuppression:false, autoGainControl:false
-    }}), MIC_TIMEOUT, 'mic permission').then(function (s) {
-    stream = s;
-    var AC = window.AudioContext || window.webkitAudioContext;
-    ctx = new AC({ sampleRate:RATE });
-    // A suspended context never fires audio callbacks — a silent stall.
-    return ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
-  }).then(function () {
-    if (Math.abs(ctx.sampleRate - RATE) > 1) {
-      // Resampling silently would corrupt the model's input. Fail loudly.
-      throw new Error('mic at ' + ctx.sampleRate + 'Hz, need ' + RATE);
-    }
-    src = ctx.createMediaStreamSource(stream);
-    // 2048-point FFT: ~23 Hz per bin, so the 208-row canvas is fed real
-    // detail rather than the same 512 bins stretched over more pixels.
-    an = ctx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0.25;
-    node = ctx.createScriptProcessor(4096, 1, 1);
-    var buf = new Float32Array(SAMPLES), n = 0;
-    // BirdNET's mel front-end tops out near 15 kHz; showing 0..24 would waste
-    // half the panel on band the model ignores.
-    var maxBin = Math.round(15000 / (RATE / 2) * an.frequencyBinCount);
-    var freq = new Uint8Array(an.frequencyBinCount);
-    specReset();
-    return new Promise(function (res, rej) {
-      var fin = false, got = false;
-      function done(err) {
-        if (fin) { return; } fin = true; teardown();
-        if (err) { rej(err); } else { res(buf); }
-      }
-      node.onaudioprocess = function (ev) {
-        if (fin) { return; }
-        got = true;
-        var inp = ev.inputBuffer.getChannelData(0);
-        for (var i = 0; i < inp.length && n < SAMPLES; i++) { buf[n++] = inp[i]; }
-        if (onProg) { onProg(n / SAMPLES); }
-        if (n >= SAMPLES) { done(null); }
-      };
-      function draw() {
-        if (fin) { return; }
-        an.getByteFrequencyData(freq);
-        specDrawTo(n / SAMPLES, freq, maxBin);
-        raf = requestAnimationFrame(draw);
-      }
-      src.connect(an); src.connect(node); node.connect(ctx.destination);
-      raf = requestAnimationFrame(draw);
-      // Distinguish "mic delivered nothing" from "capture is slow".
-      setTimeout(function () { if (!got && !fin) { done(new Error('mic delivered no audio')); } }, 2500);
-      setTimeout(function () { if (!fin) { done(new Error('capture stalled at ' + n)); } }, 9000);
-    });
-  }).catch(function (e) { teardown(); throw e; });
-}
-
 /* ---------- continuous monitor ----------
    A 3-second grab is a tight window to catch a bird in. The device has the
    headroom to just keep listening: inference measured 882 ms per 3 s chunk,
@@ -581,9 +478,11 @@ function monStart() {
   mode = 'monitor';
   mon = { ring:new Float32Array(WINDOW), pos:0, total:0, lastAt:0,
           inFlight:false, chunks:0, drops:0, t0:Date.now(), hits:{},
+          yamCopy:null, yamAt:0, yamBusy:false,
           stream:null, ctx:null, src:null, node:null, an:null, raf:0, freq:null,
           maxBin:0, stopping:false };
   show('mon'); title('LISTENING'); leds(0, 2, 0);
+  if (photoWanted && !photoIdx) { setTimeout(loadPhotos, 500); }
   monRender();
 
   withTimeout(navigator.mediaDevices.getUserMedia({ audio:{
@@ -636,6 +535,11 @@ function monAudio(ev) {
   var p = mon.pos;
   for (var j = 0; j < WINDOW; j++) { out[j] = mon.ring[(p + j) % WINDOW]; }
   mon.inFlight = true;
+  /* Keep a copy for YAMNet only when it is actually eligible to run. Copying
+     576KB on every window just in case would be wasteful, and running YAMNet
+     on every empty window would spend the headroom the 50% overlap needs. */
+  var wantYam = yamOn && yam && !mon.yamBusy && (Date.now() - mon.yamAt > 6000);
+  mon.yamCopy = wantYam ? out.slice() : null;
   worker.postMessage({ message:'identify', pcm:out }, [out.buffer]);
 }
 
@@ -673,6 +577,13 @@ function monResult(d) {
   mon.inFlight = false;
   mon.chunks++;
   var top = (d.top || []).filter(function (t) { return !t.noise; });
+  // Nothing identifiable this window — spend the spare capacity asking YAMNet
+  // whether it was a dog, a cat or livestock, which BirdNET has no class for.
+  if ((!top.length || top[0].confidence < SHOW_MIN) && mon.yamCopy) {
+    mon.yamBusy = true; mon.yamAt = Date.now();
+    yam.postMessage({ message:'classify', pcm:mon.yamCopy }, [mon.yamCopy.buffer]);
+  }
+  mon.yamCopy = null;
   if (top.length && top[0].confidence >= SHOW_MIN) {
     var b = top[0];
     var h = mon.hits[b.sci] || { sci:b.sci, common:b.common, best:0, n:0,
@@ -682,6 +593,25 @@ function monResult(d) {
     h.at = Date.now();
     mon.hits[b.sci] = h;
   }
+  monRender();
+}
+
+/* A YAMNet answer is a coarse creature ("Dog"), not a species. It appears in
+   the session list so the user knows what was heard, but never enters the
+   collection: a "Dog" row among 6511 named species would be a category error. */
+function monYam(d) {
+  if (!mon) { return; }
+  mon.yamBusy = false;
+  var top = (d.top || []).filter(function (t) { return t.taxon !== 'bird'; });
+  if (!top.length || top[0].confidence < 0.30) { return; }
+  var t = top[0];
+  var key = 'yam:' + t.name;
+  var h = mon.hits[key] || { sci:key, common:t.name, best:0, n:0,
+                             taxon:t.taxon, coarse:true };
+  h.n++;
+  if (t.confidence > h.best) { h.best = t.confidence; }
+  h.at = Date.now();
+  mon.hits[key] = h;
   monRender();
 }
 
@@ -725,8 +655,9 @@ function monRender() {
     // now is distinguishable from one heard early in the session.
     d.className = 'mrow' + (now - x.at < 6000 ? ' fresh' : '');
     var nm = document.createElement('span');
-    nm.className = 'nm'; nm.textContent = x.common;
-    if (x.best < recordMin()) { nm.style.color = 'var(--ink3)'; }
+    nm.className = 'nm';
+    nm.textContent = x.common + (x.coarse ? ' ~' : '');
+    if (x.coarse || x.best < recordMin()) { nm.style.color = 'var(--ink3)'; }
     d.appendChild(nm);
     if (x.taxon !== 'bird') {
       var tx = document.createElement('span');
@@ -759,6 +690,7 @@ function monStop() {
 
   var hits = monHits(), saved = 0, fresh = 0;
   hits.forEach(function (x) {
+    if (x.coarse) { return; }          // not a species; nothing to record
     if (x.best >= recordMin()) {
       var isNew = record({ sci:x.sci, common:x.common, confidence:x.best, geo:x.geo });
       saved++; if (isNew) { fresh++; }
@@ -781,44 +713,7 @@ function monStop() {
   }).join('\n');
 }
 
-/* ---------- identify ---------- */
-function identify() {
-  var now = Date.now();
-  if (!ready || busy) { return; }
-  // Eight rapid PTT taps shut the r1 down. We cannot stop the taps reaching
-  // the device, but we refuse to pile work on top of them.
-  if (now - lastTrigger < LOCKOUT_MS) { return; }
-  lastTrigger = now; busy = true;
-
-  show('cap'); title('SCANNING'); leds(0, 2, 0);
-  el('count').textContent = '3.0'; el('capMsg').textContent = 'HOLD STILL';
-
-  capture(function (f) { el('count').textContent = (3 - f * 3).toFixed(1); })
-    .then(function (pcm) {
-      el('count').textContent = '--'; el('capMsg').textContent = 'ANALYSING';
-      // Keep a copy: BirdNET answers first, and YAMNet is only asked when it
-      // has nothing. Transferring the buffer would leave nothing to ask with.
-      pendingPcm = yamOn ? pcm.slice() : null;
-      birdVerdict = null;
-      worker.postMessage({ message:'identify', pcm:pcm }, [pcm.buffer]);
-    })
-    .catch(function (e) {
-      busy = false; leds(1, 0, 0);
-      pendingPcm = null;
-      // Distinguish denied from timed-out from absent: they need different
-      // fixes and "MIC ERROR" alone tells the user nothing.
-      var n = e && e.name, msg = (e && e.message) || String(e);
-      if (n === 'NotAllowedError' || n === 'SecurityError') {
-        msg = 'permission denied - allow the mic and relaunch';
-      } else if (n === 'NotFoundError' || n === 'NotReadableError') {
-        msg = 'no mic available (' + n + ')';
-      } else if (msg.indexOf('timeout') === 0) {
-        msg = 'no response from mic - try again';
-      }
-      showPlain('MIC ERROR', 'MIC ERROR', msg);
-    });
-}
-
+/* ---------- result card ---------- */
 function clearCard() {
   el('chips').innerHTML = '';
   el('confFill').style.width = '0';
@@ -836,116 +731,6 @@ function showPlain(t, head, sub) {
   el('sci').textContent = sub || '';
 }
 
-function showResult(d) {
-  if (mode === 'monitor') { monResult(d); return; }
-  if (photoWanted && !photoIdx) { setTimeout(loadPhotos, 300); }
-  var top = d.top || [];
-  /* BirdNET is authoritative for wild species. YAMNet is asked ONLY when
-     BirdNET has nothing, because YAMNet's best bird answer is the word "Bird"
-     while BirdNET names the species — but YAMNet knows dogs, cats, horses and
-     livestock, which BirdNET has no classes for at all. */
-  var weak = !top.length || top[0].confidence < SHOW_MIN || top[0].noise;
-  if (weak && yamOn && pendingPcm && yam) {
-    birdVerdict = d;
-    el('capMsg').textContent = 'CHECKING ANIMALS';
-    yam.postMessage({ message:'classify', pcm:pendingPcm }, [pendingPcm.buffer]);
-    pendingPcm = null;
-    return;
-  }
-  pendingPcm = null;
-  busy = false; leds(0, 0, 1);
-  show('res'); clearCard();
-
-  if (!top.length || top[0].confidence < SHOW_MIN) {
-    title('NO SIGNAL');
-    el('photoTxt').textContent = '--';
-    el('common').textContent = 'NO SIGNAL';
-    el('sci').textContent = top.length
-      ? 'closest was ' + top[0].common : 'nothing heard';
-    return;
-  }
-  // A confident Siren or Engine is the model saying it heard no animal.
-  if (top[0].noise) {
-    title('INTERFERENCE'); el('photoTxt').textContent = '!';
-    el('common').textContent = top[0].common;
-    el('sci').textContent = 'not an animal';
-    el('confFill').style.width = Math.round(top[0].confidence * 100) + '%';
-    el('confTxt').textContent = top[0].confidence.toFixed(2);
-    el('alts').textContent = 'move away from the source';
-    return;
-  }
-
-  var b = top[0];
-  var bd = bandOf(b.confidence);
-  var saved = b.confidence >= recordMin();
-  var isNew = saved ? record(b) : false;
-  var tax = taxonOf(b.sci);
-
-  title(isNew ? 'NEW ENTRY' : 'IDENTIFIED');
-  if (isNew) { addChip('NEW', 'new'); }
-  if (tax !== 'bird') { addChip(TAXON_LONG[tax], tax); }
-  if (!saved) { addChip('NOT SAVED', 'warn'); }
-
-  el('band4').textContent = bd ? bd.label : '';
-  el('band4').className = bd ? bd.cls : '';
-  el('confFill').style.width = Math.round(b.confidence * 100) + '%';
-  el('confTxt').textContent = b.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
-  el('common').textContent = b.common;
-  el('sci').textContent = b.sci;
-  lastShownSci = b.sci;
-  setPhoto(b.sci);
-
-  var r = rarityOf(b.geo);
-  if (!r) {
-    el('rarity').textContent = zip ? '' : 'set ZIP in CFG for rarity';
-  } else if (r.anomaly) {
-    el('rarity').textContent = 'ANOMALY - not expected at ' + zip;
-    el('rarity').className = 'anomaly';
-  } else {
-    var a = document.createElement('span');
-    a.textContent = r.label + '  ';
-    var p = document.createElement('span');
-    p.className = 'pip'; p.textContent = pips(r.pips);
-    el('rarity').appendChild(a); el('rarity').appendChild(p);
-  }
-  el('alts').textContent = top.slice(1).map(function (x) {
-    return x.common + '  ' + x.confidence.toFixed(2); }).join('\n');
-}
-
-
-/* A YAMNet answer is a coarse creature ("Dog"), not a species, so it is shown
-   plainly as that and never written to the collection — a Pokedex entry of
-   "Dog" alongside 6511 named species would be a category error. */
-function showYam(d) {
-  busy = false; leds(0, 0, 1);
-  show('res'); clearCard();
-  var top = (d.top || []).filter(function (t) { return t.taxon !== 'bird'; });
-  if (!top.length || top[0].confidence < 0.20) {
-    var b = birdVerdict && birdVerdict.top && birdVerdict.top[0];
-    title('NO SIGNAL');
-    el('photoTxt').textContent = '--';
-    el('common').textContent = 'NO SIGNAL';
-    el('sci').textContent = b ? 'closest was ' + b.common : 'nothing heard';
-    birdVerdict = null;
-    return;
-  }
-  var t = top[0];
-  title('ANIMAL');
-  el('photoTxt').textContent = '?';
-  addChip(t.taxon.toUpperCase(), t.taxon === 'bird' ? 'warn' : t.taxon);
-  addChip('NOT A SPECIES', 'warn');
-  var bd = bandOf(t.confidence);
-  el('band4').textContent = bd ? bd.label : '';
-  el('band4').className = bd ? bd.cls : '';
-  el('confFill').style.width = Math.round(t.confidence * 100) + '%';
-  el('confTxt').textContent = t.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
-  el('common').textContent = t.name;
-  el('sci').textContent = 'general sound, not identified to species';
-  el('alts').textContent = top.slice(1).map(function (x) {
-    return x.name + '  ' + x.confidence.toFixed(2); }).join('\n');
-  birdVerdict = null;
-}
-
 function addChip(text, cls) {
   var s = document.createElement('span');
   s.className = 'chip ' + cls; s.textContent = text;
@@ -954,15 +739,13 @@ function addChip(text, cls) {
 
 /* ---------- views + focus ---------- */
 var RAILS = {
-  home: [['SCAN',  function(){ identify(); }],
-         ['LISTEN', function(){ monStart(); }],
-         ['DEX',    function(){ show('dexmenu'); }],
-         ['CFG',    function(){ show('cfg'); }]],
-  mon:  [['STOP',   function(){ monStop(); }]],
-  res:  [['SCAN',   function(){ identify(); }],
-         ['LISTEN', function(){ monStart(); }],
-         ['DEX',    function(){ show('dexmenu'); }],
-         ['HOME',   function(){ show('home'); }]]
+  home: [['SCAN', function(){ monStart(); }],
+         ['DEX',  function(){ show('dexmenu'); }],
+         ['CFG',  function(){ show('cfg'); }]],
+  mon:  [['STOP', function(){ monStop(); }]],
+  res:  [['SCAN', function(){ monStart(); }],
+         ['DEX',  function(){ show('dexmenu'); }],
+         ['HOME', function(){ show('home'); }]]
 };
 
 function dexKeys() {
@@ -1020,7 +803,7 @@ function focusables() {
 
 function show(name) {
   view = name; focus = 0;
-  ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','mic','mon','zip'].forEach(function (v) {
+  ['boot','home','res','dex','dexmenu','az','brow','entry','cfg','mic','mon','zip'].forEach(function (v) {
     el('v-' + v).className = 'view' + (v === name ? ' on' : '');
   });
   if (name === 'dex' || name === 'brow' || name === 'entry' || name === 'res') { loadPhotos(); }
@@ -1804,7 +1587,13 @@ function boot() {
       if (view === 'home') { title('POKEDEX'); renderHome(); }
       return;
     }
-    if (d.message === 'result') { showResult(d); return; }
+    if (d.message === 'result') {
+      // A window can still be in flight when STOP is pressed. With no live
+      // session there is nothing to add it to, and rendering it would wipe
+      // the summary the user is looking at.
+      if (mon) { monResult(d); }
+      return;
+    }
   });
   worker.addEventListener('error', function (e) {
     leds(1, 0, 0);
@@ -1818,17 +1607,20 @@ function bootYam() {
   try { yam = new Worker('yamnet.js'); } catch (e) { yam = null; return; }
   yam.addEventListener('message', function (ev) {
     var d = ev.data;
-    if (d.message === 'yam') { showYam(d); return; }
+    if (d.message === 'yam') {
+      if (mon) { monYam(d); }
+      return;
+    }
     if (d.message === 'error') {
-      // A YAMNet failure must never strand a capture: fall back to whatever
-      // BirdNET said, even if that was "nothing".
-      if (birdVerdict) { var v = birdVerdict; birdVerdict = null; yamOn = false; showResult(v); }
+      yamOn = false;
+      if (mon) { mon.yamBusy = false; mon.yamCopy = null; }
       return;
     }
   });
   yam.addEventListener('error', function () {
+    // A YAMNet failure must never disturb the session; BirdNET carries on.
     yamOn = false;
-    if (birdVerdict) { var v = birdVerdict; birdVerdict = null; showResult(v); }
+    if (mon) { mon.yamBusy = false; mon.yamCopy = null; }
   });
 }
 
