@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b6">
-<script>window.__BUILD = "b6";</script>
+<meta name="build" content="b7">
+<script>window.__BUILD = "b7";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -263,6 +263,7 @@
   <div id="v-entry" class="view"><div id="entryWrap"></div></div>
   <div id="v-cfg" class="view"><div id="cfgList" class="list"></div></div>
 
+  <div id="v-mic" class="view"><div id="micList" class="list"></div></div>
   <div id="v-zip" class="view">
     <div class="mid">
       <div style="font-size:10px;color:var(--amber);letter-spacing:.08em">ENTER ZIP</div>
@@ -739,6 +740,7 @@ function focusables() {
             { label:'SAVE AT',   act:function(){ cycleSave(); } },
             { label:'ANIMAL FALLBACK', act:function(){ toggleYam(); } },
             { label:'CHECK DEPLOY', act:function(){ checkDeploy(); } },
+            { label:'MIC TEST',     act:function(){ show('mic'); micTest(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
   }
   if (view === 'az') {
@@ -751,6 +753,9 @@ function focusables() {
   if (view === 'brow') { return browItems(); }
   if (view === 'entry') {
     return [{ label:'< BACK', act:function(){ show(entryFrom); } }];
+  }
+  if (view === 'mic') {
+    return [{ label:'< BACK', act:function(){ show('cfg'); } }];
   }
   if (view === 'dexmenu') {
     return [
@@ -767,7 +772,7 @@ function focusables() {
 
 function show(name) {
   view = name; focus = 0;
-  ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','zip'].forEach(function (v) {
+  ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','mic','zip'].forEach(function (v) {
     el('v-' + v).className = 'view' + (v === name ? ' on' : '');
   });
   if (name === 'dex' || name === 'brow' || name === 'entry' || name === 'res') { loadPhotos(); }
@@ -778,6 +783,7 @@ function show(name) {
   else if (name === 'az') { renderAZ(); }
   else if (name === 'brow') { renderBrow(); }
   else if (name === 'entry') { renderEntry(); }
+  else if (name === 'mic') { title('MIC TEST'); }
   else if (name === 'zip') { title('ZIP CODE'); }
   renderRail();
 }
@@ -871,6 +877,148 @@ function renderDex() {
     l.appendChild(h);
   }
   scrollFocusIntoView(l);
+}
+
+/* ---------- mic diagnostic ----------
+   The capture path has several distinct failure points that all present as
+   "the mic is broken": mediaDevices missing entirely, the device not being
+   enumerated, the permission being denied, the permission never being
+   answered because this WebView does not implement the prompt (the same
+   class of bug as its missing geolocation and file-chooser handlers), a
+   granted stream that delivers no samples, or a context stuck suspended.
+   Each needs a different fix, so this reports which one it is rather than
+   making me guess from a distance. */
+function micLine(k, v, cls) {
+  var l = el('micList');
+  var d = document.createElement('div');
+  d.className = 'row';
+  var a = document.createElement('span');
+  a.className = 'nm'; a.textContent = k;
+  var b = document.createElement('span');
+  b.className = 'rt'; b.textContent = String(v);
+  b.style.whiteSpace = 'normal';
+  if (cls === 'ok') { b.style.color = 'var(--green)'; }
+  if (cls === 'bad') { b.style.color = 'var(--red-txt)'; }
+  d.appendChild(a); d.appendChild(b);
+  l.appendChild(d);
+  return b;
+}
+
+function micTest() {
+  var l = el('micList');
+  l.innerHTML = '';
+  micLine('< BACK', '');
+  micLine('secure ctx', window.isSecureContext ? 'yes' : 'NO',
+          window.isSecureContext ? 'ok' : 'bad');
+  micLine('mediaDevices', navigator.mediaDevices ? 'yes' : 'NO',
+          navigator.mediaDevices ? 'ok' : 'bad');
+  micLine('getUserMedia',
+          (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) ? 'yes' : 'NO',
+          (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) ? 'ok' : 'bad');
+
+  // Permissions API is optional in this WebView; absence is not a failure.
+  var permRow = micLine('permission', 'querying...');
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'microphone' })
+      .then(function (st) {
+        permRow.textContent = st.state;
+        permRow.style.color = st.state === 'granted' ? 'var(--green)'
+                            : st.state === 'denied' ? 'var(--red-txt)' : '';
+      })
+      .catch(function (e) { permRow.textContent = 'unsupported'; });
+  } else {
+    permRow.textContent = 'no permissions API';
+  }
+
+  var devRow = micLine('audio inputs', 'enumerating...');
+  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+    navigator.mediaDevices.enumerateDevices().then(function (ds) {
+      var ins = ds.filter(function (d) { return d.kind === 'audioinput'; });
+      devRow.textContent = ins.length + ' found';
+      devRow.style.color = ins.length ? 'var(--green)' : 'var(--red-txt)';
+    }).catch(function (e) { devRow.textContent = 'failed: ' + e.name; });
+  } else {
+    devRow.textContent = 'unsupported';
+  }
+
+  // The real test. Try the exact constraints capture() uses, then fall back to
+  // bare audio:true — if the bare call succeeds where the constrained one
+  // fails, the CONSTRAINTS are the problem, not the permission.
+  var gumRow = micLine('getUserMedia()', 'asking (up to 25s)...');
+  var t0 = Date.now();
+  function attempt(constraints, label, next) {
+    withTimeout(navigator.mediaDevices.getUserMedia(constraints), MIC_TIMEOUT, 'mic')
+      .then(function (stream) {
+        var tr = stream.getAudioTracks()[0];
+        var st = tr && tr.getSettings ? tr.getSettings() : {};
+        gumRow.textContent = label + ' OK in ' + (Date.now() - t0) + 'ms';
+        gumRow.style.color = 'var(--green)';
+        micLine('track', (tr && tr.label) || '(no label)', 'ok');
+        micLine('rate / ch', (st.sampleRate || '?') + 'Hz / ' + (st.channelCount || '?'));
+        micLine('AGC/NS/AEC', [st.autoGainControl, st.noiseSuppression,
+                               st.echoCancellation].join(' '));
+        micSamples(stream);
+      })
+      .catch(function (e) {
+        var name = (e && e.name) || 'Error';
+        var msg = (e && e.message) || String(e);
+        if (next) {
+          gumRow.textContent = label + ' failed (' + name + '), trying bare...';
+          next();
+          return;
+        }
+        gumRow.textContent = label + ' ' + name;
+        gumRow.style.color = 'var(--red-txt)';
+        micLine('detail', msg.slice(0, 60), 'bad');
+        micLine('meaning', name === 'NotAllowedError'
+          ? 'denied or never prompted'
+          : msg.indexOf('timeout') === 0
+            ? 'no answer - WebView may not implement the prompt'
+            : name, 'bad');
+      });
+  }
+
+  attempt({ audio: { channelCount:1, sampleRate:RATE, echoCancellation:false,
+                     noiseSuppression:false, autoGainControl:false } },
+          'constrained',
+          function () { t0 = Date.now(); attempt({ audio: true }, 'bare', null); });
+}
+
+/* A granted stream that delivers silence is a separate failure from a stream
+   that is never granted, and the old code could not tell them apart. */
+function micSamples(stream) {
+  var row = micLine('samples', 'listening 2s...');
+  var AC = window.AudioContext || window.webkitAudioContext;
+  var ctx, node, src, n = 0, peak = 0;
+  try { ctx = new AC({ sampleRate: RATE }); }
+  catch (e) { row.textContent = 'AudioContext failed: ' + e.name; row.style.color='var(--red-txt)'; return; }
+  micLine('ctx rate', ctx.sampleRate + 'Hz',
+          Math.abs(ctx.sampleRate - RATE) < 2 ? 'ok' : 'bad');
+  var stRow = micLine('ctx state', ctx.state);
+  Promise.resolve(ctx.state === 'suspended' ? ctx.resume() : null).then(function () {
+    stRow.textContent = ctx.state;
+    src = ctx.createMediaStreamSource(stream);
+    node = ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = function (ev) {
+      var d = ev.inputBuffer.getChannelData(0);
+      n += d.length;
+      for (var i = 0; i < d.length; i++) {
+        var a = d[i] < 0 ? -d[i] : d[i];
+        if (a > peak) { peak = a; }
+      }
+    };
+    src.connect(node); node.connect(ctx.destination);
+    setTimeout(function () {
+      try { node.disconnect(); src.disconnect(); ctx.close(); } catch (e) {}
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      row.textContent = n + ' samples, peak ' + peak.toFixed(4);
+      row.style.color = n === 0 ? 'var(--red-txt)'
+                      : peak < 1e-5 ? 'var(--red-txt)' : 'var(--green)';
+      micLine('verdict', n === 0 ? 'granted but SILENT - no callbacks'
+                       : peak < 1e-5 ? 'granted but all zeros'
+                       : 'MIC WORKS', n && peak >= 1e-5 ? 'ok' : 'bad');
+    }, 2000);
+  });
 }
 
 /* ---------- deploy check ----------
@@ -983,6 +1131,7 @@ function renderCfg() {
               SAVE_LEVELS[saveLevel][1] + '  ' + recordMin().toFixed(2),
               yamOn ? 'ON  16MB' : 'OFF',
               deployMsg,
+              '',
               eraseCount ? (3 - eraseCount) + ' more presses'
                          : Object.keys(dex).length + ' entries'];
   l.innerHTML = '';
@@ -993,7 +1142,7 @@ function renderCfg() {
     nm.className = 'nm'; nm.textContent = it.label;
     var v = document.createElement('span');
     v.className = 'rt'; v.textContent = vals[i];
-    if (i === 5 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 6 && eraseCount) { v.style.color = 'var(--red-txt)'; }
     if (i === 4 && deployBad) { v.style.color = 'var(--red-txt)'; }
     d.appendChild(nm); d.appendChild(v);
     bindRow(d, i);
