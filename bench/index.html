@@ -133,6 +133,12 @@ function bench() {
            d.cosErrSmall > 1e-4 ? 'err' : 'dim')
       line('  -> cos err ' + d.cosErrLarge.toExponential(1) + ' @3000rad (ref 2.9e-4)',
            d.cosErrLarge > 1e-2 ? 'err' : 'dim')
+      line('  -> pow rel err ' + d.powErr.toExponential(1) + ' (ref 1.3e-7)',
+           d.powErr > 1e-4 ? 'err' : 'dim')
+      // Identical checksum exonerates the FFT front-end and moves the
+      // divergence downstream into the conv stack.
+      line('  -> stft checksum ' + d.stft.toFixed(3) + ' (ref 8293.448)',
+           Math.abs(d.stft - 8293.448) > 0.5 ? 'err' : 'dim')
       return step('labels', 'labels', 'label list fetch', 60000)
     })
     .then(function (d) {

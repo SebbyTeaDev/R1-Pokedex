@@ -75,13 +75,56 @@ async function main() {
         }
         return worst
     }
+    // MelSpecLayerSimple raises every mel bin to a fractional power:
+    // pow(x, 1/(1+exp(1.23))) ~= x^0.226. GLSL pow is exp2(y*log2(x)), and
+    // mobile log2/exp2 are much looser than desktop. An error here rescales
+    // the whole spectrogram — which moves confidence without moving ranking.
+    async function powError() {
+        var xs = new Float32Array(2048)
+        for (var i = 0; i < xs.length; i++) { xs[i] = 1e-5 + (i / xs.length) * 10 }
+        var e = 1 / (1 + Math.exp(1.23))
+        var got = await tf.pow(tf.tensor1d(xs), tf.scalar(e)).data()
+        var worst = 0
+        for (var j = 0; j < xs.length; j++) {
+            var want = Math.pow(xs[j], e)
+            var rel = Math.abs(got[j] - want) / Math.max(want, 1e-6)
+            if (rel > worst) { worst = rel }
+        }
+        return worst
+    }
+
+    // Run the STFT kernel alone on a fixed signal. If this checksum differs
+    // between devices, the front-end is the divergence; if it matches, the
+    // FFT is exonerated and the difference is downstream.
+    async function stftSum() {
+        var n = 16384
+        var sig = new Float32Array(n)
+        for (var i = 0; i < n; i++) {
+            sig[i] = Math.sin(i * 0.01) * 0.5 + Math.sin(i * 0.13) * 0.25
+        }
+        var out = tf.engine().runKernel('STFT', {
+            signal: tf.tensor1d(sig), frameLength: 1024, frameStep: 512
+        })
+        var arr = await out.data()
+        out.dispose()
+        var sum = 0
+        for (var j = 0; j < arr.length; j++) { sum += Math.abs(arr[j]) }
+        return sum
+    }
+
+    var powErr = -1, stft = -1
+    try { powErr = await powError() } catch (e) { powErr = -1 }
+    try { stft = await stftSum() } catch (e) { stft = -1 }
+
     postMessage({
         message: 'precision',
         renderer: renderer,
         highp: prec('HIGH_FLOAT'),
         mediump: prec('MEDIUM_FLOAT'),
         cosErrSmall: await cosError(6.283185307179586),
-        cosErrLarge: await cosError(3000)
+        cosErrLarge: await cosError(3000),
+        powErr: powErr,
+        stft: stft
     })
 
     t = performance.now()
