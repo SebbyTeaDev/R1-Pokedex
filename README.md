@@ -105,15 +105,33 @@ model and 520 KB of label files.
 **The confidence gap is the real finding, and its cause is still open.** Same
 input, same weights, deterministic math — 0.81 desktop vs 0.69 on-device.
 
-- **Ruled out: f16 texture fallback.** The r1 reports `render f32 true`,
-  `force f16 false` — same as desktop. Storage precision is fine.
-- **Still open:** shader *ALU* precision and transcendental accuracy are a
-  separate axis from storage. The STFT computes twiddle factors in-shader with
-  `cos()`/`sin()` at arguments up to ~3000 rad, and GLSL ES permits mobile GPUs
-  far looser accuracy there than desktop; error compounds through every
-  butterfly stage. `bench/` now measures this directly — mantissa bits via
-  `getShaderPrecisionFormat`, plus cos error at the range the kernel uses.
-  Desktop reference (RTX 4090): highp 23b, 6.4e-7 @2π, 2.9e-4 @3000 rad.
+Measured on-device, against an RTX 4090 reference:
+
+| Probe | r1 (PowerVR) | Desktop ref | Verdict |
+|---|---|---|---|
+| `render f32` / `force f16` | true / false | true / false | storage fp32 ✅ |
+| `highp` mantissa | 23b | 23b | ALU is fp32 ✅ |
+| `mediump` mantissa | **10b** | 23b | ⚠️ latent trap |
+| cos err @2π | 2.4e-5 | 6.4e-7 | 37× worse |
+| cos err @3000 rad | **1.2e-7** | 2.9e-4 | 2400× **better** |
+
+- **Ruled out: f16 texture fallback.** Storage precision is fp32, same as desktop.
+- **Ruled out: fp16 ALU.** `highp` is a full 23-bit mantissa.
+- **Ruled out: loose transcendentals in the FFT.** At the argument range the
+  twiddle factors actually use, PowerVR is *more* accurate than ANGLE/D3D11,
+  which does sloppy range reduction for large arguments. The r1 is only worse
+  near 2π, which the kernel barely touches.
+- **Still open**, and now being measured: GLSL `pow` accuracy (the mel layer
+  raises every bin to ~x^0.226, and `pow` is `exp2(y*log2(x))`, which is loose
+  on mobile), plus an isolated STFT checksum that will exonerate or convict the
+  whole front-end in one number. Desktop ref: pow rel err 1.3e-7, checksum
+  8293.448.
+
+**`mediump` being 10b on the r1 and 23b on desktop is a trap worth
+remembering** even though it isn't the current cause. Desktop GPUs promote
+mediump to fp32, so a precision bug in any shader written later will be
+invisible in development and only appear on the device. tfjs uses `highp`
+throughout, which is why it isn't biting here.
 
 Whatever the cause, the consequence already holds: top-1 ranking survives, but
 **confidence values are not portable.** Any detection threshold must be
