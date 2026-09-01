@@ -1,0 +1,7 @@
+# Not a Jekyll site. .nojekyll disables Jekyll entirely; this file only exists
+# to keep large binary assets out of any build that still runs, since Jekyll
+# scanning a 28MB photo blob and a 49MB model is what made Pages builds flaky.
+exclude:
+  - .harvest
+  - tools
+  - NOTICE-images.txt
