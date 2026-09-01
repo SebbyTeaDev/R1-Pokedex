@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="a4">
-<script>window.__BUILD = "a4";</script>
+<meta name="build" content="a6">
+<script>window.__BUILD = "a6";</script>
 <style>
   /* Measured viewport is 240x292 (docs say 282 — trust the device). Nothing
      below hardcodes it: the 152 reading was never reproduced, so a surprise
@@ -90,6 +90,11 @@
   .tx-amphibian { color: #4DA6FF; }
   .tx-insect    { color: #C792EA; }
   .tx-mammal    { color: #F59E0B; }
+  #rarity { margin-top: 5px; font-size: 9px; color: #9A9AA5; letter-spacing: .04em; }
+  #rarity .pip { color: #F59E0B; letter-spacing: 2px; }
+  /* Off-range is the shiny-Pokemon moment: a confident detection the range
+     model says should not be here at all. Worth a second look, so it shouts. */
+  #rarity.anomaly { color: #FF5C6E; font-weight: bold; }
   /* pre-line: runners-up are newline-joined and must stay one per line. */
   #alts { margin-top: 6px; font-size: 9px; color: #7E7E88; white-space: pre-line; }
 
@@ -107,6 +112,21 @@
     flex: 0 0 auto; padding: 3px 5px; border-top: 1px solid #26262c;
     font-size: 9px; color: #7E7E88; text-align: center;
   }
+
+  /* ---- zip picker ----
+     No keyboard exists on this device, so a ZIP is entered one digit at a
+     time on the wheel. The reel only offers digits that can still complete
+     to a real US prefix, which cuts the search space hard at every slot. */
+  #zipStage { flex: 1; min-height: 0; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; padding: 6px; }
+  #zipTitle { font-size: 10px; color: #F59E0B; letter-spacing: .08em; }
+  #zipDigits { margin-top: 10px; font-size: 22px; letter-spacing: 4px; color: #e8e8ea; }
+  #zipDigits .cur { color: #0d0d0f; background: #F59E0B; padding: 0 3px; border-radius: 2px; }
+  #zipDigits .pend { color: #7E7E88; }
+  #zipWhere { margin-top: 10px; font-size: 10px; color: #4ade80; min-height: 13px; }
+  #zipHint { margin-top: 4px; font-size: 9px; color: #7E7E88; }
+  #zipFoot { flex: 0 0 auto; padding: 3px 5px; border-top: 1px solid #26262c;
+             font-size: 9px; color: #7E7E88; text-align: center; }
 </style>
 </head>
 <body>
@@ -136,10 +156,21 @@
         <div id="conf"><div id="confFill"></div></div>
         <div id="confTxt"></div>
         <div id="badge">NEW</div><span id="taxon"></span>
+        <div id="rarity"></div>
         <div id="alts"></div>
       </div>
     </div>
     <div id="foot">PTT listen &middot; scroll for dex</div>
+  </div>
+
+  <div id="zipv" class="view">
+    <div id="zipStage">
+      <div id="zipTitle">ENTER ZIP</div>
+      <div id="zipDigits"></div>
+      <div id="zipWhere"></div>
+      <div id="zipHint"></div>
+    </div>
+    <div id="zipFoot">wheel = digit &middot; PTT = next</div>
   </div>
 
   <div id="dex" class="view">
@@ -186,6 +217,57 @@ var TAXON_SHORT = { bird: '', amphibian: 'AMP', insect: 'INS', mammal: 'MAM' };
 
 function taxonOf(sci) {
   return TAXA[String(sci).split(' ')[0]] || 'bird';
+}
+
+/* ---------- range / rarity ----------
+   The range model reports eBird CHECKLIST FREQUENCY — how often birders
+   report a species here — not abundance. Rock Pigeon lands in "Rare" at
+   Ithaca because nobody bothers logging pigeons. Word the UI accordingly. */
+var ZIP3 = {};                  // "941" -> [lat, lon]
+var zip = null;                 // saved 5-digit string
+var nearby = null;              // [{sci, common, score}] for the saved ZIP
+var geoTiers = null;
+
+// Tier cuts are measured across 8 US cities x 4 seasons, not guessed.
+var TIERS = [
+  [0.30,   'COMMON',      5],
+  [0.08,   'UNCOMMON',    4],
+  [0.02,   'RARE',        3],
+  [0.0025, 'VERY RARE',   2],
+  [0,      'EXCEPTIONAL', 1]
+];
+
+function rarityOf(score) {
+  if (score === null || score === undefined) { return null; }
+  if (score < 0) { return { label: 'OFF-RANGE', pips: 0, anomaly: true }; }
+  for (var i = 0; i < TIERS.length; i++) {
+    if (score >= TIERS[i][0]) {
+      return { label: TIERS[i][1], pips: TIERS[i][2], anomaly: false };
+    }
+  }
+  return null;
+}
+
+function pips(n) {
+  var s = '';
+  for (var i = 0; i < 5; i++) { s += (i < n ? '*' : '.'); }
+  return s;
+}
+
+/* The model wants a 48-week year (4 per month), NOT 52. Upstream computes
+   (now - Jan1)/7days + 1, which reaches 53 and extrapolates past the trained
+   domain. And week = -1 is documented as year-round but aliases to late
+   November in this export, so never pass it. */
+function week48(d) {
+  d = d || new Date();
+  return (d.getMonth()) * 4 + Math.min(3, Math.floor((d.getDate() - 1) / 7)) + 1;
+}
+
+function requestGeo() {
+  if (!zip || !ready || !worker) { return; }
+  var ll = ZIP3[zip.slice(0, 3)];
+  if (!ll) { return; }
+  worker.postMessage({ message: 'geo', lat: ll[0], lon: ll[1], week: week48() });
 }
 
 /* ---------- status ---------- */
@@ -258,7 +340,9 @@ function renderDex() {
     return;
   }
   keys.sort(function (a, b) { return dex[b].last - dex[a].last; });
-  el('title').textContent = 'DEX ' + keys.length;
+  el('title').textContent = nearby
+    ? 'DEX ' + keys.length + '/' + nearby.length
+    : 'DEX ' + keys.length;
   keys.forEach(function (k) {
     var e = dex[k];
     var row = document.createElement('div');
@@ -289,6 +373,7 @@ function record(bird) {
   var e = dex[k] || { common: bird.common, sci: bird.sci, taxon: taxonOf(bird.sci),
                       count: 0, best: 0, first: Date.now() };
   if (!e.taxon) { e.taxon = taxonOf(bird.sci); }   // backfill pre-taxon records
+  if (bird.geo !== null && bird.geo !== undefined) { e.geo = bird.geo; }
   e.count++;
   e.last = Date.now();
   if (bird.confidence > e.best) { e.best = bird.confidence; }
@@ -503,6 +588,23 @@ function showResult(d) {
   var tax = taxonOf(best.sci);
   el('taxon').textContent = TAXON_ICON[tax];
   el('taxon').className = tax === 'bird' ? '' : 'on t-' + tax;
+
+  var r = rarityOf(best.geo);
+  if (!r) {
+    el('rarity').textContent = zip ? '' : 'set ZIP for rarity';
+    el('rarity').className = '';
+  } else if (r.anomaly) {
+    el('rarity').textContent = 'ANOMALY - not expected at ' + zip;
+    el('rarity').className = 'anomaly';
+  } else {
+    el('rarity').innerHTML = '';
+    var lab = document.createElement('span');
+    lab.textContent = r.label + '  ';
+    var pp = document.createElement('span');
+    pp.className = 'pip'; pp.textContent = pips(r.pips);
+    el('rarity').appendChild(lab); el('rarity').appendChild(pp);
+    el('rarity').className = '';
+  }
   el('alts').textContent = top.slice(1)
     .map(function (b) { return b.common + ' ' + b.confidence.toFixed(2); })
     .join('\n');
@@ -514,7 +616,9 @@ function show(name) {
   view = name;
   el('listen').className = 'view' + (name === 'listen' ? ' on' : '');
   el('dex').className = 'view' + (name === 'dex' ? ' on' : '');
+  el('zipv').className = 'view' + (name === 'zip' ? ' on' : '');
   if (name === 'dex') { renderDex(); }
+  else if (name === 'zip') { el('title').textContent = 'CONFIG'; }
   else { el('title').textContent = 'POKEDEX'; }
 }
 
@@ -538,6 +642,14 @@ function boot() {
       ready = true;
       status('ready', 'good');
       stage('READY', 'press PTT');
+      requestGeo();
+      return;
+    }
+    if (d.message === 'geo_loading') { status('range...', 'warn'); return; }
+    if (d.message === 'geo') {
+      nearby = d.nearby; geoTiers = d.tiers;
+      status('ready', 'good');
+      renderDex();
       return;
     }
     if (d.message === 'result') { showResult(d); return; }
@@ -546,6 +658,108 @@ function boot() {
     status('error', 'bad');
     stage('WORKER FAILED', e.message || 'see console');
   });
+}
+
+/* ---------- zip picker ----------
+   Slots 0-2 are constrained by the shipped prefix table; 3-4 are free, since
+   only the first three digits are used for the range lookup. The reel also
+   carries a '<' cell so a mis-entered digit can be undone with the same two
+   inputs and no extra mode. */
+var ZIP_KEY = 'pokedex_zip';
+var zipSlots = ['_', '_', '_', '_', '_'];
+var zipSlot = 0;
+var zipReel = [];
+var zipReelIdx = 0;
+
+function zipAllowed(slot) {
+  if (slot > 2) { return ['0','1','2','3','4','5','6','7','8','9']; }
+  var pre = zipSlots.slice(0, slot).join('');
+  var set = {};
+  for (var k in ZIP3) {
+    if (k.indexOf(pre) === 0) { set[k.charAt(slot)] = 1; }
+  }
+  return Object.keys(set).sort();
+}
+
+function zipOpen() {
+  var cur = (zip || '').split('');
+  zipSlots = ['_', '_', '_', '_', '_'];
+  // Seed from the saved ZIP so re-entering a known one is just PTT x5.
+  for (var i = 0; i < 5; i++) { if (cur[i]) { zipSlots[i] = cur[i]; } }
+  zipSlot = 0;
+  zipLoadReel();
+  show('zip');
+}
+
+function zipLoadReel() {
+  zipReel = zipAllowed(zipSlot).concat(['<']);
+  var want = zipSlots[zipSlot];
+  var at = zipReel.indexOf(want);
+  zipReelIdx = at >= 0 ? at : 0;
+  zipSlots[zipSlot] = zipReel[zipReelIdx];
+  zipRender();
+}
+
+function zipRender() {
+  var d = el('zipDigits');
+  d.innerHTML = '';
+  for (var i = 0; i < 5; i++) {
+    var sp = document.createElement('span');
+    sp.textContent = zipSlots[i];
+    sp.className = i === zipSlot ? 'cur' : (i > zipSlot ? 'pend' : '');
+    d.appendChild(sp);
+  }
+  var pre = zipSlots.slice(0, 3).join('');
+  var ll = ZIP3[pre];
+  el('zipWhere').textContent = ll ? ll[0].toFixed(2) + ', ' + ll[1].toFixed(2) : '';
+  var n = zipReel.length - 1;
+  el('zipHint').textContent = zipSlot <= 2
+    ? n + ' of 10 digits possible'
+    : 'digit ' + (zipSlot + 1) + ' of 5';
+}
+
+function zipTurn(dir) {
+  zipReelIdx = (zipReelIdx + dir + zipReel.length) % zipReel.length;
+  zipSlots[zipSlot] = zipReel[zipReelIdx];
+  zipRender();
+}
+
+function zipCommit() {
+  if (zipSlots[zipSlot] === '<') {
+    zipSlots[zipSlot] = '_';
+    if (zipSlot === 0) { show('listen'); return; }
+    zipSlot--;
+    zipLoadReel();
+    return;
+  }
+  if (zipSlot < 4) { zipSlot++; zipLoadReel(); return; }
+  zip = zipSlots.join('');
+  store.set(dex);
+  saveZip();
+  nearby = null; geoTiers = null;
+  requestGeo();
+  show('listen');
+  stage('ZIP SET', zip);
+}
+
+function saveZip() {
+  try {
+    if (store && store.kind === 'creationStorage') {
+      window.creationStorage.plain.setItem(ZIP_KEY, b64enc(zip));
+    } else {
+      localStorage.setItem(ZIP_KEY, zip);
+    }
+  } catch (e) {}
+}
+
+function loadZip(hasHost) {
+  try {
+    if (hasHost) {
+      return Promise.resolve(window.creationStorage.plain.getItem(ZIP_KEY))
+        .then(function (v) { return v ? b64dec(v) : null; });
+    }
+    return Promise.resolve(localStorage.getItem(ZIP_KEY));
+  } catch (e) { return Promise.resolve(null); }
 }
 
 /* ---------- input ----------
@@ -562,7 +776,9 @@ function sawHW(name) {
   .forEach(function (n) { window.addEventListener(n, function () { sawHW(n); }); });
 
 window.addEventListener('sideClick', function () {
-  if (view === 'dex') { show('listen'); } else { identify(); }
+  if (view === 'zip') { zipCommit(); }
+  else if (view === 'dex') { show('listen'); }
+  else { identify(); }
 });
 // Kept in case this firmware does dispatch them — harmless if it never does,
 // and identify() is idempotent while busy.
@@ -570,10 +786,15 @@ window.addEventListener('longPressEnd', function () {
   if (view === 'listen') { identify(); }
 });
 window.addEventListener('scrollDown', function () {
-  if (view === 'listen') { show('dex'); }
-  else { el('dexList').scrollTop += 36; }
+  if (view === 'zip') { zipTurn(1); return; }
+  if (view === 'listen') { show('dex'); return; }
+  var l = el('dexList');
+  // Past the end of the collection, the wheel keeps going into settings.
+  if (l.scrollTop + l.clientHeight >= l.scrollHeight - 2) { zipOpen(); return; }
+  l.scrollTop += 36;
 });
 window.addEventListener('scrollUp', function () {
+  if (view === 'zip') { zipTurn(-1); return; }
   if (view === 'dex') {
     if (el('dexList').scrollTop <= 0) { show('listen'); }
     else { el('dexList').scrollTop -= 36; }
@@ -587,6 +808,7 @@ el('foot').addEventListener('pointerdown', function (e) {
   e.stopPropagation(); show('dex');
 });
 el('foot2').addEventListener('pointerdown', function () { show('listen'); });
+el('zipFoot').addEventListener('pointerdown', function () { zipCommit(); });
 
 /* ---------- startup ---------- */
 if (navigator.serviceWorker) {
@@ -605,12 +827,19 @@ fetch('./index.html?cb=' + Math.random(), { cache: 'no-store' })
   })
   .catch(function () {});
 
+fetch('data/zip3.json').then(function (r) { return r.json(); })
+  .then(function (z) { ZIP3 = z; requestGeo(); })
+  .catch(function () { /* rarity simply stays unavailable */ });
+
 fetch('data/taxa.json').then(function (r) { return r.json(); })
   .then(function (t) { TAXA = t; renderDex(); })
   .catch(function () { /* all species simply read as birds */ });
 
 whenSDKReady(function (hasHost) {
   store = makeStore(hasHost);
+  loadZip(hasHost).then(function (z) {
+    if (z && /^[0-9]{5}$/.test(z)) { zip = z; requestGeo(); }
+  });
   store.get().then(function (d) {
     dex = d || {};
     renderDex();

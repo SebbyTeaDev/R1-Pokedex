@@ -70,8 +70,79 @@ async function main() {
     await predict(tf.zeros([1, 144000]))
     postMessage({ message: 'warmup', ms: performance.now() - t })
 
+    /* ---------- range model ----------
+       Separate 6.8MB graph model: [lat, lon, week] -> per-label occurrence.
+       Loaded lazily on the first geo request so a user with no ZIP set never
+       pays for it, and never before 'ready' so it cannot delay first capture. */
+    var areaModel = null
+    var geoScores = null                 // per-label occurrence for the saved ZIP
+    // The model clamps its logits to +/-15, so 0.000553 is a hard floor meaning
+    // "definitively not in range" — a distinct class, not a small probability.
+    var GEO_FLOOR = 0.00056
+    var NEARBY_MIN = 0.0025              // below this is not worth listing
+
+    var speciesSci = labels.map(function (l) { return l.split('_')[0] })
+    var speciesCommon = labels.map(function (l) {
+        var p = l.split('_'); return p[1] || p[0]
+    })
+
+    async function geo(data) {
+        if (!areaModel) {
+            postMessage({ message: 'geo_loading' })
+            areaModel = await tf.loadGraphModel(BASE + 'area-model/model.json')
+        }
+        // Raw degrees and a 1..48 week. The scaling is baked into the graph, so
+        // pre-normalizing would double-apply it. Upstream's own caller computes
+        // a 1..53 week, which extrapolates past the trained domain, and passes
+        // -1 for "year-round" — but in this export the year-round mask is a
+        // constant, so -1 silently aliases to late November instead.
+        var t = tf.tensor2d([[data.lat, data.lon, data.week]], [1, 3], 'float32')
+        var out = areaModel.predict(t)
+        // Output is already sigmoid-passed; do not squash it again. Values are
+        // eBird checklist frequency, clamped to [0.000553, 0.999447], where the
+        // low value is a hard floor meaning "not expected here at all".
+        geoScores = await out.data()
+        t.dispose()
+        out.dispose()
+
+        // Build the NEARBY list here rather than shipping 6522 labels to the
+        // page just so it can join them against an array.
+        var near = []
+        for (var i = 0; i < geoScores.length; i++) {
+            if (geoScores[i] > NEARBY_MIN && !NON_SPECIES[speciesSci[i]]) {
+                near.push({ sci: speciesSci[i], common: speciesCommon[i], score: geoScores[i] })
+            }
+        }
+        near.sort(function (a, b) { return b.score - a.score })
+        postMessage({
+            message: 'geo',
+            week: data.week,
+            nearby: near,
+            tiers: countTiers(geoScores)
+        })
+    }
+
+    function countTiers(s) {
+        var t = { common: 0, uncommon: 0, rare: 0, veryRare: 0, exceptional: 0 }
+        for (var i = 0; i < s.length; i++) {
+            if (NON_SPECIES[speciesSci[i]]) { continue }
+            var v = s[i]
+            if (v >= 0.30) { t.common++ }
+            else if (v >= 0.08) { t.uncommon++ }
+            else if (v >= 0.02) { t.rare++ }
+            else if (v >= 0.0025) { t.veryRare++ }
+            else if (v > GEO_FLOOR) { t.exceptional++ }
+        }
+        return t
+    }
+
     onmessage = function (ev) {
-        run(ev.data).catch(function (e) { fail('identify', e) })
+        var d = ev.data
+        if (d && d.message === 'geo') {
+            geo(d).catch(function (e) { fail('geo', e) })
+            return
+        }
+        run(d).catch(function (e) { fail('identify', e) })
     }
     postMessage({ message: 'ready' })
 
@@ -99,7 +170,10 @@ async function main() {
                     // 11 of the 6522 labels are not birds. Flag them here so the
                     // UI can report interference instead of filing a passing
                     // siren in the collection as a species.
-                    noise: NON_SPECIES[sci] === 1
+                    noise: NON_SPECIES[sci] === 1,
+                    // null when no ZIP is set — the UI must not render a rarity
+                    // it does not have. -1 marks the model's off-range floor.
+                    geo: geoScores ? (geoScores[i] <= GEO_FLOOR ? -1 : geoScores[i]) : null
                 })
             }
         }
