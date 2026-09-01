@@ -49,7 +49,9 @@ self.addEventListener('activate', function (e) {
    them you change a filename or press SAVE FOR OFFLINE, which refetches with
    cache:'reload'. */
 function isImmutable(url) {
-    return /\/models\/|\/vendor\//.test(url);
+    // data/birds.* is the 9.2MB photo pack — immutable and large, so it
+    // belongs with the model rather than with the small mutable JSON.
+    return /\/models\/|\/vendor\/|\/data\/birds\./.test(url);
 }
 
 self.addEventListener('fetch', function (e) {

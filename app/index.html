@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b2">
-<script>window.__BUILD = "b2";</script>
+<meta name="build" content="b3">
+<script>window.__BUILD = "b3";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -105,10 +105,19 @@
 
   /* ---- result ---- */
   #resWrap { flex:1; min-height:0; overflow:hidden; padding:5px; }
-  #photo { float:left; width:56px; height:56px; margin:0 6px 3px 0; border-radius:2px;
-           background:var(--sunk); border:1px solid var(--line-hi);
+  #photo { float:left; position:relative; width:56px; height:56px; margin:0 6px 3px 0;
+           border-radius:2px; background:var(--sunk); border:1px solid var(--line-hi);
            display:flex; align-items:center; justify-content:center;
            font-size:8px; color:var(--ink3); overflow:hidden; }
+  #photoImg { display:none; width:100%; height:100%; object-fit:cover; }
+  #photoImg.on { display:block; }
+  #photoImg.on + #photoTxt { display:none; }
+  /* ~93% of these images legally require attribution, so the credit ships
+     with them and is rendered, not stored and forgotten. */
+  #credit { font-size:8px; color:var(--ink3); margin-top:3px;
+            overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .thumb { flex:0 0 auto; width:18px; height:18px; border-radius:2px;
+           object-fit:cover; background:var(--sunk); }
   .chip { display:inline-block; font-size:9px; font-weight:bold; padding:1px 5px;
           border-radius:3px; letter-spacing:.06em; color:#0D0D0F; margin:0 3px 2px 0; }
   .chip.new{background:var(--green)} .chip.amphibian{background:var(--blue)}
@@ -197,7 +206,7 @@
 
   <div id="v-res" class="view">
     <div id="resWrap">
-      <div id="photo">NO IMG</div>
+      <div id="photo"><img id="photoImg" alt=""><span id="photoTxt">NO IMG</span></div>
       <div id="chips"></div>
       <div id="band4"></div>
       <div id="conf"><i id="confFill"></i></div>
@@ -207,6 +216,7 @@
       <hr class="rule">
       <div id="rarity"></div>
       <div id="alts"></div>
+      <div id="credit"></div>
     </div>
   </div>
 
@@ -506,7 +516,9 @@ function clearCard() {
   el('band4').textContent = ''; el('band4').className = '';
   el('rarity').textContent = ''; el('rarity').className = '';
   el('alts').textContent = '';
-  el('photo').textContent = 'NO IMG';
+  el('photoTxt').textContent = 'NO IMG';
+  setPhoto(null);
+  lastShownSci = null;
 }
 function showPlain(t, head, sub) {
   show('res'); title(t); clearCard();
@@ -521,7 +533,7 @@ function showResult(d) {
 
   if (!top.length || top[0].confidence < SHOW_MIN) {
     title('NO SIGNAL');
-    el('photo').textContent = '--';
+    el('photoTxt').textContent = '--';
     el('common').textContent = 'NO SIGNAL';
     el('sci').textContent = top.length
       ? 'closest was ' + top[0].common : 'nothing heard';
@@ -529,7 +541,7 @@ function showResult(d) {
   }
   // A confident Siren or Engine is the model saying it heard no animal.
   if (top[0].noise) {
-    title('INTERFERENCE'); el('photo').textContent = '!';
+    title('INTERFERENCE'); el('photoTxt').textContent = '!';
     el('common').textContent = top[0].common;
     el('sci').textContent = 'not an animal';
     el('confFill').style.width = Math.round(top[0].confidence * 100) + '%';
@@ -555,6 +567,8 @@ function showResult(d) {
   el('confTxt').textContent = b.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
   el('common').textContent = b.common;
   el('sci').textContent = b.sci;
+  lastShownSci = b.sci;
+  setPhoto(b.sci);
 
   var r = rarityOf(b.geo);
   if (!r) {
@@ -682,6 +696,12 @@ function renderDex() {
     var e = dex[k];
     var d = document.createElement('div');
     d.className = 'row' + (focus === i + 1 ? ' sel' : '');
+    var url = photoURL(e.sci);
+    if (url) {
+      var im = document.createElement('img');
+      im.className = 'thumb'; im.src = url; im.alt = '';
+      d.appendChild(im);
+    }
     var nm = document.createElement('span');
     nm.className = 'nm'; nm.textContent = e.common;
     d.appendChild(nm);
@@ -834,6 +854,61 @@ function zipCommit() {
   show('cfg');
 }
 
+/* ---------- photos ----------
+   One 9.2MB blob plus an offset index, not 6498 files: on a 4KB-block
+   filesystem individual files cost ~166% overhead (10MB occupying ~27MB) and
+   6498 cache entries. Loaded in the background AFTER the worker is ready, so
+   it never competes with the model for the first capture. */
+var photoBuf = null, photoIdx = null, credits = null;
+var photoCache = {}, photoOrder = [];
+
+function loadPhotos() {
+  if (photoIdx) { return; }
+  fetch('data/birds.idx.json').then(function (r) { return r.json(); })
+    .then(function (idx) {
+      photoIdx = idx;
+      return fetch('data/birds.webpack').then(function (r) { return r.arrayBuffer(); });
+    })
+    .then(function (buf) { photoBuf = buf; rerenderPhotos(); })
+    .catch(function () { photoIdx = null; });
+  // {lic:[...], by:{sci:[name, licIndex]}} — licences are interned because
+  // ~12 distinct strings across 6498 entries is a lot of repetition.
+  fetch('data/attribution.json').then(function (r) { return r.json(); })
+    .then(function (c) { credits = c; rerenderPhotos(); }).catch(function () {});
+}
+
+function photoURL(sci) {
+  if (!photoBuf || !photoIdx) { return null; }
+  if (photoCache[sci]) { return photoCache[sci]; }
+  var e = photoIdx[sci];
+  if (!e) { return null; }
+  var url = URL.createObjectURL(
+    new Blob([new Uint8Array(photoBuf, e[0], e[1])], { type:'image/webp' }));
+  photoCache[sci] = url; photoOrder.push(sci);
+  // Object URLs are never collected on their own; keep a small working set.
+  while (photoOrder.length > 40) {
+    var old = photoOrder.shift();
+    URL.revokeObjectURL(photoCache[old]);
+    delete photoCache[old];
+  }
+  return url;
+}
+
+function setPhoto(sci) {
+  var img = el('photoImg'), url = sci ? photoURL(sci) : null;
+  if (url) { img.src = url; img.className = 'on'; }
+  else { img.removeAttribute('src'); img.className = ''; }
+  var c = credits && sci ? credits.by[sci] : null;
+  el('credit').textContent = c ? (c[0] + ' / ' + credits.lic[c[1]]) : '';
+}
+
+// The pack can land after a card is already on screen.
+var lastShownSci = null;
+function rerenderPhotos() {
+  if (view === 'res' && lastShownSci) { setPhoto(lastShownSci); }
+  if (view === 'dex') { renderDex(); }
+}
+
 /* ---------- range ---------- */
 function requestGeo() {
   if (!zip || !ready || !worker) { return; }
@@ -859,7 +934,9 @@ function boot() {
       return;
     }
     if (d.message === 'warmup') { el('bootSub').textContent = 'warming up'; leds(0, 1, 0); return; }
-    if (d.message === 'ready') { ready = true; leds(0, 0, 1); show('home'); requestGeo(); return; }
+    if (d.message === 'ready') {
+      ready = true; leds(0, 0, 1); show('home'); requestGeo(); loadPhotos(); return;
+    }
     if (d.message === 'geo_loading') { title('RANGE...'); return; }
     if (d.message === 'geo') {
       nearby = d.nearby;

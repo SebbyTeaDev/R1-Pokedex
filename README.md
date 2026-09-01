@@ -456,6 +456,51 @@ surface as an INTERFERENCE result and are never recorded.
 
 ---
 
+## Species photographs
+
+All **6498 of 6511** species carry a bundled photo (99.80%). The 13 without are
+11 crickets and two obscure birds; they fall back to a silhouette, which is the
+Pokedex idiom anyway.
+
+| | |
+|---|---|
+| Format | 80x80 WebP q70, cover-cropped |
+| Total | **9.22 MB**, mean 1487 B per image |
+| Packing | ONE blob + offset index, not 6498 files |
+| Source | Wikimedia Commons via the Wikipedia pageimages API |
+| Licences | zero NC, zero ND. 70% CC BY-SA, 22% CC BY, 7% PD/CC0 |
+
+**Bundle, do not lazy-fetch.** 9 MB against a 49 MB model already cached is not
+worth a network dependency, a cache-management bug surface, and offline gaps.
+
+**One blob, not 6498 files.** On a 4KB-block filesystem individual files cost
+~166% overhead — 10 MB of images occupying ~27 MB on the device — plus 6498
+cache entries. `birds.idx.json` maps scientific name to `[offset, length]`.
+
+**Do NOT use BirdNET's own taxonomy API for images.** It looks like the obvious
+source, but **24% of it is Macaulay Library, all rights reserved**, and their
+terms forbid third-party download. Hotlinking is fine; bundling is not.
+iNaturalist is only ~15% as freely licensed as Commons and 9% is ND, which
+forbids the cropping. Commons is the answer.
+
+Two traps in the harvest, both fixed in `tools/harvest-images.py`:
+
+- **Arbitrary thumbnail widths return HTTP 400.** Only 60/120/250/330/500 are
+  valid buckets, so a request for 240 fails.
+- **Redirect targets are many-to-one.** Several species share one article —
+  *Acanthis flammea* and relatives all redirect to "Redpoll" — so a map keyed by
+  destination title silently drops all but one. That is how a bird as common as
+  the Common Redpoll first came back imageless.
+- **MediaWiki normalises titles**, turning underscores into spaces, so joining
+  `pageimage` ("A_B.jpg") against page titles ("A B.jpg") matched only the ~5%
+  of filenames containing no underscore.
+
+Attribution ships in `app/data/attribution.json` (308 KB, licences interned)
+and is rendered on the result card — ~93% of these images require it. Full
+credits with source URLs are in `NOTICE-images.txt`.
+
+---
+
 ## Model notes
 
 - **V2.4**: input `float32[1,144000]`, output `[1,6522]` **logits** (TFLite/ONNX)

@@ -217,12 +217,26 @@ def phase_attrib():
                 return v.get("value", "") if isinstance(v, dict) else ""
 
             name = page.get("title", "")[5:]        # strip "File:"
-            artist = tag.sub("", field("Artist")).strip()
+            artist = tag.sub("", field("Artist"))
+            # Artist is HTML: unescape entities the tag strip leaves behind.
+            for ent, ch in (("&amp;", "&"), ("&quot;", '"'), ("&#039;", "'"),
+                            ("&#39;", "'"), ("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">")):
+                artist = artist.replace(ent, ch)
+            artist = " ".join(artist.split())
             # Commons fills this in when uploads lack machine-readable authorship.
             if "No machine-readable author" in artist:
                 artist = "Unknown"
+            # Some credits are a whole paragraph of licensing prose. Cut at the
+            # first sentence or clause so the line stays a name, not an essay.
+            if len(artist) > 44:
+                for sep in (". ", ", ", " ("):
+                    i = artist.find(sep)
+                    if 0 < i <= 44:
+                        artist = artist[:i]
+                        break
+                artist = artist[:44].rstrip(" ,;:-")
             attrib[name] = {
-                "by": " ".join(artist.split())[:80] or "Unknown",
+                "by": artist or "Unknown",
                 "lic": field("LicenseShortName").strip() or "see file page",
                 "url": ii.get("descriptionurl", ""),
             }
@@ -310,13 +324,51 @@ def phase_pack():
     json.dump(index, io.open(os.path.join(OUT, "birds.idx.json"), "w", encoding="utf-8"),
               separators=(",", ":"), sort_keys=True)
 
-    used = {}
+    # MediaWiki normalises page titles by turning underscores into spaces, so
+    # attrib is keyed "A B.jpg" while pageimage gives "A_B.jpg". Joining them
+    # raw matched only the ~5% of filenames that contain no underscore.
+    def key(f):
+        return f.replace("_", " ").strip()
+
+    attrib_n = {}
+    for k, v in attrib.items():
+        attrib_n[key(k)] = v
+
+    used, missing = {}, 0
     for sci in index:
         f = meta.get(sci, {}).get("file", "")
-        if f in attrib:
-            used[sci] = attrib[f]
-    json.dump(used, io.open(os.path.join(OUT, "attribution.json"), "w", encoding="utf-8"),
+        a = attrib_n.get(key(f))
+        if a:
+            used[sci] = a
+        else:
+            missing += 1
+    log(f"attribution joined for {len(used)}, missing {missing}")
+    # Ship a compact credit: licences interned (there are ~12 distinct), and no
+    # description URL — the device has no browser to open one, so a URL is a
+    # megabyte of bytes nobody can use. The full list including every source
+    # URL is written to NOTICE-images.txt for the repo instead.
+    lic_list, lic_idx = [], {}
+    compact = {}
+    for sci in sorted(used):
+        a = used[sci]
+        if a["lic"] not in lic_idx:
+            lic_idx[a["lic"]] = len(lic_list)
+            lic_list.append(a["lic"])
+        compact[sci] = [a["by"], lic_idx[a["lic"]]]
+    json.dump({"lic": lic_list, "by": compact},
+              io.open(os.path.join(OUT, "attribution.json"), "w", encoding="utf-8"),
               separators=(",", ":"), sort_keys=True)
+
+    with io.open(os.path.join(ROOT, "NOTICE-images.txt"), "w",
+                 encoding="utf-8", newline="\n") as fh:
+        fh.write("Species photographs bundled in app/data/birds.webpack\n")
+        fh.write("Source: Wikimedia Commons via the Wikipedia pageimages API.\n")
+        fh.write("Each image was cover-cropped to square and resized to "
+                 f"{OUT_PX}x{OUT_PX} WebP. No other modification.\n")
+        fh.write("Licences are as stated per entry; see each file page for full terms.\n\n")
+        for sci in sorted(used):
+            a = used[sci]
+            fh.write(f"{sci}\t{a['by']}\t{a['lic']}\t{a['url']}\n")
 
     log(f"packed {len(index)} images, blob {len(blob)/1048576:.2f} MB, "
         f"mean {len(blob)//max(1,len(index))} B")
