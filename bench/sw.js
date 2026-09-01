@@ -12,6 +12,10 @@
  * cached for field use.
  */
 
+/* Bump ONLY when cached bytes become invalid — never for a code change. The
+   name is the identity of a 49 MB download already on the device; renaming it
+   silently orphans that and forces the user to fetch it all again. The shell
+   is network-first, so shell changes need no bump. */
 var CACHE = 'r1-bench-v2';
 var SHELL = ['./', './index.html', './birdnet-worker.js', './vendor/tf.min.js',
              './test-audio.json'];
@@ -26,8 +30,28 @@ self.addEventListener('install', function (e) {
 });
 
 self.addEventListener('activate', function (e) {
-    e.waitUntil(self.clients.claim());
+    e.waitUntil(
+        caches.keys()
+            .then(function (names) {
+                return Promise.all(names.map(function (n) {
+                    /* Only ours, and only superseded ones. */
+                    return (n !== CACHE && n.indexOf('r1-bench-') === 0)
+                        ? caches.delete(n) : null;
+                }));
+            })
+            .then(function () { return self.clients.claim(); })
+    );
 });
+
+/* Immutable, large, and never edited in place: model weights, the pinned tfjs
+   build, labels, test audio. Network-first on these means re-downloading 49 MB
+   on every online launch just to arrive at the bytes already in cache — which
+   made being online SLOWER than being offline. Cache-first instead. To replace
+   them you change a filename or press SAVE FOR OFFLINE, which refetches with
+   cache:'reload'. */
+function isImmutable(url) {
+    return /\/models\/|\/vendor\/|test-audio\.json$/.test(url);
+}
 
 self.addEventListener('fetch', function (e) {
     if (e.request.method !== 'GET') { return; }
@@ -36,6 +60,26 @@ self.addEventListener('fetch', function (e) {
     catch (err) { sameOrigin = false; }
     if (!sameOrigin) { return; }
 
+    if (isImmutable(e.request.url)) {
+        e.respondWith(
+            caches.match(e.request).then(function (hit) {
+                if (hit) { return hit; }
+                return fetch(e.request).then(function (res) {
+                    if (res && res.ok) {
+                        var copy = res.clone();
+                        caches.open(CACHE).then(function (c) {
+                            c.put(e.request, copy).catch(function () {});
+                        });
+                    }
+                    return res;
+                });
+            })
+        );
+        return;
+    }
+
+    /* The shell is small and mutable. Network-first is what lets a git push
+       reach a device in the field; cache-first here would pin it forever. */
     e.respondWith(
         fetch(e.request)
             .then(function (res) {
