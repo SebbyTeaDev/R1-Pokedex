@@ -203,15 +203,27 @@ def phase_attrib():
         })
         for page in res.get("query", {}).get("pages", []):
             ii = (page.get("imageinfo") or [{}])[0]
-            ex = ii.get("extmetadata", {})
+            if not isinstance(ii, dict):
+                ii = {}
+            # MediaWiki is PHP: an EMPTY array serializes as [] rather than {}.
+            # So a file with no extmetadata yields a list here, and calling
+            # .get() on it raises. Same for individual absent fields.
+            ex = ii.get("extmetadata")
+            if not isinstance(ex, dict):
+                ex = {}
+
+            def field(key):
+                v = ex.get(key)
+                return v.get("value", "") if isinstance(v, dict) else ""
+
             name = page.get("title", "")[5:]        # strip "File:"
-            artist = tag.sub("", ex.get("Artist", {}).get("value", "")).strip()
+            artist = tag.sub("", field("Artist")).strip()
             # Commons fills this in when uploads lack machine-readable authorship.
             if "No machine-readable author" in artist:
                 artist = "Unknown"
             attrib[name] = {
-                "by": " ".join(artist.split())[:80],
-                "lic": ex.get("LicenseShortName", {}).get("value", "").strip(),
+                "by": " ".join(artist.split())[:80] or "Unknown",
+                "lic": field("LicenseShortName").strip() or "see file page",
                 "url": ii.get("descriptionurl", ""),
             }
         if i % 20 == 0:
