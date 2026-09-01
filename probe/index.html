@@ -201,6 +201,7 @@
     wrappers.forEach(function (n) {
       rows[n] = row("s-sdk", n, "absent @0ms", "bad");
     });
+    var firstSeen = {};
     var storageRow = row("s-sdk", "storage round-trip", "waiting for API", "warn");
     var accelRow = row("s-sdk", "accel isAvailable", "waiting for API", "warn");
     var done = false;
@@ -257,17 +258,20 @@
       var all = true;
       wrappers.forEach(function (n) {
         if (window[n]) {
-          rows[n].lastChild.textContent = "present @" + ms + "ms";
+          /* Record FIRST sighting, not the latest poll — how long a creation
+             must wait before touching the SDK is the number that matters. */
+          if (firstSeen[n] === undefined) { firstSeen[n] = ms; }
+          rows[n].lastChild.textContent = "first seen @" + firstSeen[n] + "ms";
           rows[n].lastChild.className = "v ok";
         } else {
           all = false;
-          rows[n].lastChild.textContent = "absent @" + ms + "ms";
+          rows[n].lastChild.textContent = "absent through " + ms + "ms";
         }
       });
       if (all && !done) { done = true; proveStorage(); proveAccel(); }
     }
     poll(0);
-    [250, 1000, 3000, 6000].forEach(function (ms) {
+    [50, 100, 250, 500, 1000, 1500, 2000, 3000, 4000, 6000].forEach(function (ms) {
       setTimeout(function () { poll(ms); }, ms);
     });
     setTimeout(function () {
