@@ -308,9 +308,23 @@ and still decisive: sustained GPU load, thermals, and battery.
    arrive within 6 s. Storage round-trips and the accelerometer reports
    available. The original "3 of 6" was a one-shot check run before injection,
    the same root cause as the viewport misread. See the API section above.
-3. **Offline.** A creation is fetched from its URL on *every* launch and the shell
-   HTML isn't cached between loads — no network, no app. Zero of 600+ known
-   creations use a service worker. Unexplored, and it matters for field birding.
+3. ~~**Offline.**~~ **Answered 2026-09-01: it works.** A service worker
+   registers, activates, controls the page on subsequent launches, and **serves
+   the shell with wifi off — the creation launches with no network.** All four
+   stores survive relaunch (`localStorage`, `indexedDB`, `cacheAPI`,
+   `creationStorage`), verified with launch counters reaching n=3 across
+   online and offline launches.
+
+   The premise that "the shell isn't cached between loads" was wrong, and the
+   observation that zero of 600+ creations use a service worker looks like
+   nobody having tried rather than evidence it can't work.
+
+   **Remaining work for true field offline: the model.** It is still fetched
+   cross-origin from `georg95.github.io`, and `probe/sw.js` deliberately skips
+   cross-origin requests. Mirror the weights into this repo — same origin, so
+   the existing service worker caches them opportunistically, no third-party
+   dependency in the field, and it sets up the FP16 swap (52 MB → ~26 MB).
+   Storage quota measured 63.6 GB, so size is irrelevant.
 
 ## Constraints worth not rediscovering
 
@@ -327,6 +341,15 @@ and still decisive: sustained GPU load, thermals, and battery.
   stable URL — changes are a `git push` and the same QR keeps working.
 - **Never put a site password in front of a creation.** The WebView hits the
   form with no keyboard, and same-origin worker scripts 401 behind it.
+- **Ship a build stamp and check it before debugging anything.** GitHub Pages
+  sends `Cache-Control: max-age=600`, so relaunching within ten minutes of a
+  push serves stale HTML. That is indistinguishable from a feature failing to
+  appear, and it cost a debugging round here. `probe/index.html` carries a
+  `<meta name="build">` and refetches itself with `cache: no-store` to compare.
+- **Service workers must be network-first, not cache-first.** A cache-first
+  shell would pin the creation to whatever it cached on install, with no way to
+  push a fix to a device in the field. Network-first still gives full offline
+  via the failed-fetch fallback — measured working with wifi off.
 
 ### Upstream bugs in georg95/birdnet-web — do not rediscover
 
