@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>R1 Probe</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #0d0d0f; color: #e8e8ea;
+    font: 11px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    overflow-x: hidden;
+  }
+  #app { padding: 6px 7px 40px; }
+  h1 {
+    font-size: 12px; margin: 0 0 6px; letter-spacing: .04em;
+    color: #F59E0B; text-transform: uppercase;
+  }
+  section { margin: 0 0 8px; }
+  h2 {
+    font-size: 10px; margin: 0 0 3px; padding-bottom: 2px;
+    color: #9a9aa2; text-transform: uppercase; letter-spacing: .06em;
+    border-bottom: 1px solid #26262c;
+  }
+  .row { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+  .k { color: #7d7d86; flex: 0 0 auto; }
+  .v { margin-left: auto; text-align: right; word-break: break-word; }
+  .ok   { color: #4ade80; }
+  .bad  { color: #f87171; }
+  .warn { color: #fbbf24; }
+  button {
+    display: block; width: 100%; margin: 4px 0;
+    padding: 7px 6px; font: inherit; font-size: 11px;
+    background: #1c1c22; color: #F59E0B;
+    border: 1px solid #33333c; border-radius: 5px;
+  }
+  button:active { background: #2a2a33; }
+  button[disabled] { opacity: .45; color: #7d7d86; }
+  #evt {
+    min-height: 15px; color: #4ade80; font-size: 10px;
+    padding: 2px 0; word-break: break-word;
+  }
+  .note { color: #6b6b74; font-size: 9.5px; padding: 2px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>R1 Probe</h1>
+
+  <section><h2>Display</h2><div id="s-display"></div></section>
+  <section><h2>Engine</h2><div id="s-engine"></div></section>
+  <section><h2>WASM</h2><div id="s-wasm"></div></section>
+  <section><h2>Graphics</h2><div id="s-gfx"></div></section>
+  <section><h2>Rabbit API</h2><div id="s-rabbit"></div></section>
+
+  <section>
+    <h2>CPU Bench</h2>
+    <div id="s-cpu"><div class="note">Estimates inference headroom.</div></div>
+    <button id="b-cpu">Run CPU benchmark</button>
+  </section>
+
+  <section>
+    <h2>Storage</h2>
+    <div id="s-store"></div>
+    <button id="b-store">Test IndexedDB (8&nbsp;MB)</button>
+  </section>
+
+  <section>
+    <h2>Audio</h2>
+    <div id="s-audio"></div>
+    <button id="b-audio">Test microphone</button>
+  </section>
+
+  <section>
+    <h2>Camera</h2>
+    <div id="s-cam"></div>
+    <button id="b-cam">Enumerate cameras</button>
+  </section>
+
+  <section>
+    <h2>Hardware events</h2>
+    <div id="evt">press PTT / scroll wheel…</div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  function row(host, k, v, cls) {
+    var d = document.createElement("div");
+    d.className = "row";
+    var a = document.createElement("span"); a.className = "k"; a.textContent = k;
+    var b = document.createElement("span"); b.className = "v " + (cls || ""); b.textContent = v;
+    d.appendChild(a); d.appendChild(b);
+    document.getElementById(host).appendChild(d);
+    return d;
+  }
+  function clear(host) { document.getElementById(host).innerHTML = ""; }
+  function yn(v) { return v ? "yes" : "no"; }
+  function cls(v) { return v ? "ok" : "bad"; }
+  function mb(bytes) { return (bytes / 1048576).toFixed(1) + " MB"; }
+
+  /* ---------- display ---------- */
+  row("s-display", "viewport", window.innerWidth + "x" + window.innerHeight);
+  row("s-display", "screen", screen.width + "x" + screen.height);
+  row("s-display", "dpr", String(window.devicePixelRatio));
+
+  /* ---------- engine ---------- */
+  var ua = navigator.userAgent;
+  var chrome = (ua.match(/Chrome\/(\d+)/) || [])[1] || "n/a";
+  var android = (ua.match(/Android (\d+)/) || [])[1] || "n/a";
+  row("s-engine", "chrome", chrome);
+  row("s-engine", "android", android);
+  row("s-engine", "cores", String(navigator.hardwareConcurrency || "n/a"));
+  row("s-engine", "deviceMemory", (navigator.deviceMemory || "n/a") + " GB");
+  row("s-engine", "coi", yn(window.crossOriginIsolated), cls(window.crossOriginIsolated));
+  row("s-engine", "secureCtx", yn(window.isSecureContext), cls(window.isSecureContext));
+
+  /* ---------- wasm ---------- */
+  var hasWasm = typeof WebAssembly === "object";
+  row("s-wasm", "wasm", yn(hasWasm), cls(hasWasm));
+
+  // v128 SIMD probe
+  var simd = false;
+  try {
+    simd = WebAssembly.validate(new Uint8Array([
+      0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,
+      10,10,1,8,0,65,0,253,15,253,98,11
+    ]));
+  } catch (e) { simd = false; }
+  row("s-wasm", "SIMD", yn(simd), cls(simd));
+
+  var sab = typeof SharedArrayBuffer !== "undefined";
+  row("s-wasm", "SharedArrayBuf", yn(sab), cls(sab));
+  row("s-wasm", "threads", yn(sab && window.crossOriginIsolated),
+      cls(sab && window.crossOriginIsolated));
+
+  /* ---------- graphics ---------- */
+  var gl = null;
+  try {
+    var c = document.createElement("canvas");
+    gl = c.getContext("webgl2") ? "webgl2" : (c.getContext("webgl") ? "webgl" : null);
+  } catch (e) {}
+  row("s-gfx", "webgl", gl || "none", cls(!!gl));
+  row("s-gfx", "webgpu", yn(!!navigator.gpu), cls(!!navigator.gpu));
+
+  /* offline-capability surface — nobody in the ecosystem has used these */
+  row("s-engine", "cachesAPI", yn(!!window.caches), cls(!!window.caches));
+  row("s-engine", "serviceWkr", yn(!!navigator.serviceWorker), cls(!!navigator.serviceWorker));
+  row("s-engine", "indexedDB", yn(!!window.indexedDB), cls(!!window.indexedDB));
+
+  /* ---------- rabbit api surface ---------- */
+  [
+    ["PluginMessageHandler", window.PluginMessageHandler],
+    ["CreationVoiceHandler", window.CreationVoiceHandler],
+    ["creationStorage",      window.creationStorage],
+    ["creationSensors",      window.creationSensors],
+    ["TouchEventHandler",    window.TouchEventHandler],
+    ["closeWebView",         window.closeWebView]
+  ].forEach(function (p) {
+    row("s-rabbit", p[0], yn(!!p[1]), cls(!!p[1]));
+  });
+
+  /* ---------- cpu benchmark ---------- */
+  function matmul(n, iters) {
+    var A = new Float32Array(n * n), B = new Float32Array(n * n), C = new Float32Array(n * n);
+    for (var i = 0; i < n * n; i++) { A[i] = Math.random(); B[i] = Math.random(); }
+    var t0 = performance.now();
+    for (var it = 0; it < iters; it++) {
+      for (var r = 0; r < n; r++) {
+        var rn = r * n;
+        for (var k = 0; k < n; k++) {
+          var a = A[rn + k], kn = k * n;
+          for (var col = 0; col < n; col++) C[rn + col] += a * B[kn + col];
+        }
+      }
+    }
+    var dt = performance.now() - t0;
+    return { ms: dt, mflops: (2 * n * n * n * iters) / (dt * 1e3) };
+  }
+
+  document.getElementById("b-cpu").onclick = function () {
+    var btn = this; btn.disabled = true; btn.textContent = "running…";
+    setTimeout(function () {
+      clear("s-cpu");
+      matmul(64, 1); // warm the JIT
+      var r = matmul(192, 2);
+      row("s-cpu", "192^3 x2", r.ms.toFixed(0) + " ms");
+      row("s-cpu", "throughput", r.mflops.toFixed(0) + " MFLOP/s");
+      // BirdNET ~ 1.5 GFLOP per 3 s window (approx).
+      var est = 1500 / r.mflops;
+      var good = est < 3;
+      row("s-cpu", "est. 3s chunk", "~" + est.toFixed(1) + " s", good ? "ok" : "warn");
+      row("s-cpu", "realtime?", good ? "likely" : "marginal", good ? "ok" : "warn");
+      var n = document.createElement("div");
+      n.className = "note";
+      n.textContent = "Scalar JS. WASM+SIMD typically 2-4x faster.";
+      document.getElementById("s-cpu").appendChild(n);
+      btn.textContent = "Re-run CPU benchmark"; btn.disabled = false;
+    }, 60);
+  };
+
+  /* ---------- storage ---------- */
+  document.getElementById("b-store").onclick = function () {
+    var btn = this; btn.disabled = true; btn.textContent = "testing…";
+    clear("s-store");
+
+    function finish(msg, klass) {
+      if (msg) row("s-store", "result", msg, klass);
+      btn.textContent = "Re-test IndexedDB"; btn.disabled = false;
+    }
+
+    var quotaP = (navigator.storage && navigator.storage.estimate)
+      ? navigator.storage.estimate()
+      : Promise.resolve(null);
+
+    quotaP.then(function (est) {
+      if (est) {
+        row("s-store", "quota", mb(est.quota || 0));
+        row("s-store", "used", mb(est.usage || 0));
+      } else {
+        row("s-store", "quota", "unavailable", "warn");
+      }
+      if (navigator.storage && navigator.storage.persisted) {
+        navigator.storage.persisted().then(function (p) {
+          row("s-store", "persisted", yn(p), p ? "ok" : "warn");
+        });
+      }
+
+      if (!window.indexedDB) { finish("no IndexedDB", "bad"); return; }
+
+      var SIZE = 8 * 1048576;
+      var blob = new Uint8Array(SIZE);
+      for (var i = 0; i < SIZE; i += 4096) blob[i] = i & 255;
+
+      var req = indexedDB.open("r1probe", 1);
+      req.onupgradeneeded = function (e) { e.target.result.createObjectStore("kv"); };
+      req.onerror = function () { finish("open failed", "bad"); };
+      req.onsuccess = function (e) {
+        var db = e.target.result, t0 = performance.now();
+        var tx = db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(blob, "model");
+        tx.oncomplete = function () {
+          var wms = performance.now() - t0, t1 = performance.now();
+          var rtx = db.transaction("kv", "readonly");
+          var g = rtx.objectStore("kv").get("model");
+          g.onsuccess = function () {
+            var rms = performance.now() - t1;
+            var okLen = g.result && g.result.byteLength === SIZE;
+            row("s-store", "write 8MB", wms.toFixed(0) + " ms");
+            row("s-store", "read 8MB", rms.toFixed(0) + " ms");
+            row("s-store", "integrity", okLen ? "ok" : "MISMATCH", cls(okLen));
+            row("s-store", "est. 50MB write", (wms * 6.25 / 1000).toFixed(1) + " s");
+            db.close();
+            finish(null);
+          };
+          rtx.onerror = function () { db.close(); finish("read failed", "bad"); };
+        };
+        tx.onerror = function () { db.close(); finish("write failed (quota?)", "bad"); };
+      };
+    })["catch"](function (err) { finish(String(err), "bad"); });
+  };
+
+  /* ---------- audio ---------- */
+  document.getElementById("b-audio").onclick = function () {
+    var btn = this; btn.disabled = true; btn.textContent = "requesting…";
+    clear("s-audio");
+
+    var AC = window.AudioContext || window.webkitAudioContext;
+    row("s-audio", "AudioWorklet", yn(AC && AC.prototype && "audioWorklet" in AC.prototype),
+        cls(AC && AC.prototype && "audioWorklet" in AC.prototype));
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      row("s-audio", "getUserMedia", "absent", "bad");
+      btn.textContent = "Test microphone"; btn.disabled = false;
+      return;
+    }
+
+    // Ask for the pristine signal: no AGC/NS/AEC, which would mangle birdsong.
+    navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        sampleRate: 48000,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    }).then(function (stream) {
+      var track = stream.getAudioTracks()[0];
+      var st = track.getSettings ? track.getSettings() : {};
+      row("s-audio", "granted", "yes", "ok");
+      row("s-audio", "label", track.label || "(none)");
+      row("s-audio", "sampleRate", (st.sampleRate || "?") + " Hz",
+          st.sampleRate === 48000 ? "ok" : "warn");
+      row("s-audio", "channels", String(st.channelCount || "?"));
+      row("s-audio", "AGC", yn(st.autoGainControl), st.autoGainControl ? "warn" : "ok");
+      row("s-audio", "noiseSupp", yn(st.noiseSuppression), st.noiseSuppression ? "warn" : "ok");
+      row("s-audio", "echoCancel", yn(st.echoCancellation), st.echoCancellation ? "warn" : "ok");
+
+      var ctx = new AC();
+      row("s-audio", "ctx rate", ctx.sampleRate + " Hz",
+          ctx.sampleRate === 48000 ? "ok" : "warn");
+
+      // Confirm real samples are flowing, not silence.
+      var src = ctx.createMediaStreamSource(stream);
+      var an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      src.connect(an);
+      var buf = new Float32Array(an.fftSize);
+      var peak = 0, frames = 0;
+      var rowPeak = row("s-audio", "peak (2s)", "listening…");
+      var iv = setInterval(function () {
+        an.getFloatTimeDomainData(buf);
+        for (var i = 0; i < buf.length; i++) {
+          var v = Math.abs(buf[i]); if (v > peak) peak = v;
+        }
+        if (++frames > 20) {
+          clearInterval(iv);
+          var vEl = rowPeak.querySelector(".v");
+          vEl.textContent = peak.toFixed(4) + (peak > 0.0005 ? " (signal)" : " (SILENT)");
+          vEl.className = "v " + (peak > 0.0005 ? "ok" : "bad");
+          track.stop(); ctx.close();
+          btn.textContent = "Re-test microphone"; btn.disabled = false;
+        }
+      }, 100);
+    })["catch"](function (err) {
+      row("s-audio", "granted", "no", "bad");
+      row("s-audio", "error", err && err.name ? err.name : String(err), "bad");
+      btn.textContent = "Test microphone"; btn.disabled = false;
+    });
+  };
+
+  /* ---------- camera ---------- */
+  document.getElementById("b-cam").onclick = function () {
+    var btn = this; btn.disabled = true;
+    clear("s-cam");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      row("s-cam", "enumerate", "absent", "bad"); btn.disabled = false; return;
+    }
+    // Permission first, or labels come back blank.
+    navigator.mediaDevices.getUserMedia({ video: true }).then(function (s) {
+      var t = s.getVideoTracks()[0];
+      var st = t.getSettings ? t.getSettings() : {};
+      row("s-cam", "granted", "yes", "ok");
+      row("s-cam", "resolution", (st.width || "?") + "x" + (st.height || "?"));
+      row("s-cam", "facing", st.facingMode || "(unset)");
+      t.stop();
+      return navigator.mediaDevices.enumerateDevices();
+    }).then(function (devs) {
+      var vids = devs.filter(function (d) { return d.kind === "videoinput"; });
+      row("s-cam", "cameras", String(vids.length));
+      vids.forEach(function (d, i) { row("s-cam", "cam" + i, d.label || "(unlabeled)"); });
+      btn.textContent = "Re-enumerate"; btn.disabled = false;
+    })["catch"](function (err) {
+      row("s-cam", "error", err && err.name ? err.name : String(err), "bad");
+      btn.disabled = false;
+    });
+  };
+
+  /* ---------- hardware events ---------- */
+  var evt = document.getElementById("evt"), seen = {}, order = [];
+  ["sideClick", "longPressStart", "longPressEnd", "scrollUp", "scrollDown"]
+    .forEach(function (name) {
+      window.addEventListener(name, function () {
+        if (!seen[name]) { seen[name] = 0; order.push(name); }
+        seen[name]++;
+        evt.textContent = order.map(function (n) { return n + ":" + seen[n]; }).join("  ");
+      });
+    });
+  window.addEventListener("keydown", function (e) {
+    var n = "key:" + (e.key || e.keyCode);
+    if (!seen[n]) { seen[n] = 0; order.push(n); }
+    seen[n]++;
+    evt.textContent = order.map(function (x) { return x + ":" + seen[x]; }).join("  ");
+  });
+})();
+</script>
+</body>
+</html>

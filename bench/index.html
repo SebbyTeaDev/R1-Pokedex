@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BirdNET bench</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #111; color: #e8c9a0;
+    font: 10px/1.35 'Courier New', Courier, monospace;
+  }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #log { flex: 1; overflow-y: auto; padding: 4px 5px; }
+  #log div { white-space: pre-wrap; word-break: break-word; }
+  .ok   { color: #8fdc8f; }
+  .err  { color: #e06363; }
+  .hot  { color: #ffd166; font-weight: bold; }
+  .dim  { color: #8a7a66; }
+  #go {
+    flex: 0 0 auto; margin: 0; border: 0; padding: 9px 0;
+    background: #F59E0B; color: #111;
+    font: bold 12px 'Courier New', Courier, monospace;
+  }
+  #go[disabled] { background: #4a4136; color: #8a7a66; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="log"></div>
+  <button id="go">RUN BENCH</button>
+</div>
+<script>
+// Bench harness for BirdNET V2.4 on the r1's WebGL path.
+// Replaces georg95/birdnet-web's test-chirpity.html, which hangs twice over:
+// once on a null ?lang= in the worker, once on an audioBuf/pcmAudio field
+// mismatch. Every await here is watchdogged so a hang names its own stage.
+
+var RUNS = 5
+var WAVE = 'https://georg95.github.io/birdnet-web/wave.json'
+var logEl = document.getElementById('log')
+var goEl = document.getElementById('go')
+
+function line(text, cls) {
+  var d = document.createElement('div')
+  if (cls) { d.className = cls }
+  d.textContent = text
+  logEl.appendChild(d)
+  logEl.scrollTop = logEl.scrollHeight
+  return d
+}
+function ms(n) { return Math.round(n) + 'ms' }
+
+// Nothing may await forever: an expired stage prints what it was waiting on.
+function watchdog(promise, stage, limitMs) {
+  return new Promise(function (resolve, reject) {
+    var timer = setTimeout(function () {
+      reject(new Error('TIMEOUT after ' + (limitMs / 1000) + 's waiting for: ' + stage))
+    }, limitMs)
+    promise.then(function (v) { clearTimeout(timer); resolve(v) },
+                 function (e) { clearTimeout(timer); reject(e) })
+  })
+}
+
+function bench() {
+  logEl.innerHTML = ''
+  goEl.disabled = true
+
+  var worker = new Worker('birdnet-worker.js')
+  var waiters = {}
+  var lastProgress = null
+
+  // One dispatcher: worker errors reject whatever stage is currently pending,
+  // so a failure surfaces as a message instead of a silent stall.
+  worker.addEventListener('message', function (ev) {
+    var d = ev.data
+    if (d.message === 'error') {
+      Object.keys(waiters).forEach(function (k) {
+        waiters[k].reject(new Error('worker/' + d.where + ': ' + d.error))
+      })
+      return
+    }
+    if (d.message === 'load_progress') {
+      var pct = Math.round(d.progress * 100) + '%'
+      if (lastProgress) { lastProgress.textContent = '  downloading model ' + pct }
+      else { lastProgress = line('  downloading model ' + pct, 'dim') }
+      return
+    }
+    if (d.message === 'run') {
+      line('  run ' + d.index + '/' + d.of + ': ' + ms(d.ms), 'hot')
+      return
+    }
+    if (waiters[d.message]) { waiters[d.message].resolve(d) }
+  })
+  worker.addEventListener('error', function (e) {
+    Object.keys(waiters).forEach(function (k) {
+      waiters[k].reject(new Error('worker failed to load: ' + e.message))
+    })
+  })
+
+  function expect(name, stage, limitMs) {
+    return watchdog(new Promise(function (resolve, reject) {
+      waiters[name] = { resolve: resolve, reject: reject }
+    }), stage, limitMs)
+  }
+
+  function step(label, name, stage, limitMs) {
+    var el = line(label + '... ')
+    return expect(name, stage, limitMs).then(function (d) {
+      el.textContent = label + '... ' + (d.ms !== undefined ? ms(d.ms) : '') + ' [OK]'
+      el.className = 'ok'
+      return d
+    })
+  }
+
+  var t0 = performance.now()
+
+  step('backend', 'backend', 'tf.setBackend(webgl)', 30000)
+    .then(function (d) {
+      line('  -> ' + d.backend, 'dim')
+      return step('labels', 'labels', 'label list fetch', 60000)
+    })
+    .then(function (d) {
+      line('  -> ' + d.count + ' species', 'dim')
+      // 52 MB unquantized over the r1's wifi; give it room.
+      return step('model', 'model', 'model download + parse', 300000)
+    })
+    .then(function () {
+      // The interesting one: shader compile on the GE8320, measured alone.
+      return step('warmup', 'warmup', 'shader compile / first pass', 180000)
+    })
+    .then(function () {
+      return expect('ready', 'worker ready', 10000)
+    })
+    .then(function () {
+      var el = line('audio... ')
+      return watchdog(fetch(WAVE).then(function (r) {
+                        if (!r.ok) { throw new Error('wave.json ' + r.status) }
+                        return r.json()
+                      }), 'wave.json download', 120000)
+        .then(function (wave) {
+          el.textContent = 'audio... ' + wave.length + ' samples [OK]'
+          el.className = 'ok'
+          line('inference x' + RUNS + '...')
+          worker.postMessage({ message: 'bench', pcmAudio: wave, runs: RUNS })
+          return expect('done', 'inference runs', 600000)
+        })
+    })
+    .then(function (d) {
+      line('')
+      line('===== ms/chunk (3s audio)', 'hot')
+      line('min    ' + ms(d.min), 'hot')
+      line('median ' + ms(d.median), 'hot')
+      line('max    ' + ms(d.max), 'hot')
+      line('realtime x' + (3000 / d.median).toFixed(2), 'hot')
+      line('')
+      line('===== top species')
+      if (!d.top.length) { line('(nothing over 0.1)', 'dim') }
+      d.top.forEach(function (b) {
+        line(b.name + '  ' + b.confidence.toFixed(2))
+      })
+      line('')
+      line('total ' + ms(performance.now() - t0), 'dim')
+    })
+    .catch(function (e) {
+      line('')
+      line('FAILED: ' + (e && e.message ? e.message : String(e)), 'err')
+    })
+    .then(function () {
+      goEl.disabled = false
+    })
+}
+
+// pointerdown, never touchstart, and no preventDefault anywhere — see README.
+goEl.addEventListener('pointerdown', bench)
+</script>
+</body>
+</html>
