@@ -6,526 +6,454 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="a6">
-<script>window.__BUILD = "a6";</script>
+<meta name="build" content="b1">
+<script>window.__BUILD = "b1";</script>
 <style>
-  /* Measured viewport is 240x292 (docs say 282 — trust the device). Nothing
-     below hardcodes it: the 152 reading was never reproduced, so a surprise
-     viewport should degrade rather than break. */
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
+     a band background and a fill, never small type; --red-txt is the 6.48:1
+     variant for the rare red word. Every other token here is >= 4.83:1. */
+  :root {
+    --bg:#0D0D0F; --panel:#16161A; --sunk:#08080A; --sel:#1E1E26;
+    --line:#2A2A32; --line-hi:#3A3A44;
+    --red:#DC0A2D; --red-dk:#A80722; --red-txt:#FF5C6E;
+    --amber:#F59E0B; --amber-dk:#B97407;
+    --green:#4ADE80; --blue:#4DA6FF; --violet:#C792EA;
+    --ink:#E8E8EA; --ink2:#9A9AA5; --ink3:#7E7E88;
+    --mono: ui-monospace, "Roboto Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body {
-    margin: 0; padding: 0; height: 100%; overflow: hidden;
-    background: #0d0d0f; color: #e8e8ea;
-    font: 11px/1.3 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    user-select: none;
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background:var(--bg); color:var(--ink);
+    font:11px/1.3 var(--mono); user-select:none;
   }
-  #app { display: flex; flex-direction: column; height: 100%; }
+  #app { display:flex; flex-direction:column; height:100%; }
 
-  #bar {
-    flex: 0 0 auto; display: flex; gap: 5px; align-items: baseline;
-    padding: 3px 5px; border-bottom: 1px solid #26262c;
-    font-size: 9px; color: #9A9AA5;
+  /* ---- red band ---- */
+  #band {
+    flex:0 0 auto; display:flex; align-items:center; gap:6px; padding:0 5px;
+    height:22px; color:#fff; font-size:9px; letter-spacing:.08em;
+    background:linear-gradient(180deg,#F0143A 0%,var(--red) 55%,var(--red-dk) 100%);
+    box-shadow:inset 0 -1px 0 rgba(0,0,0,.55), 0 1px 0 #4A0410;
   }
-  #bar .sp { margin-left: auto; }
-  .warn { color: #fbbf24; }
-  .bad  { color: #f87171; }
-  .good { color: #4ade80; }
-
-  .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
-  .view.on { display: flex; }
-
-  /* ---- listen ---- */
-  #stage {
-    flex: 1; min-height: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; padding: 6px; text-align: center;
+  .lens {
+    width:14px; height:14px; border-radius:50%; flex:0 0 auto;
+    background:radial-gradient(circle at 32% 28%,
+      #DDF0FF 0%,#7FC4FF 18%,var(--blue) 44%,#1668B8 78%,#0C3E72 100%);
+    box-shadow:inset 0 0 0 1.5px #F2F2F5, inset 0 -2px 3px rgba(0,0,0,.45),
+               0 0 5px rgba(77,166,255,.5);
   }
-  #state { font-size: 12px; color: #F59E0B; letter-spacing: .06em; }
-  #sub { font-size: 9px; color: #9A9AA5; margin-top: 3px; }
+  #bandTitle { flex:1 1 auto; overflow:hidden; white-space:nowrap;
+               text-overflow:ellipsis; }
+  #leds { display:flex; gap:3px; flex:0 0 auto; }
+  .led { width:5px; height:5px; border-radius:50%; background:currentColor; opacity:.16; }
+  .led.on { opacity:1; box-shadow:0 0 4px currentColor; }
+  /* steps() reads as hardware rather than as a CSS transition, and is cheaper. */
+  .led.blink { animation:led .5s steps(2,end) infinite; }
+  @keyframes led { 0%{opacity:1} 50%{opacity:.2} }
+  .led.r{color:var(--red-txt)} .led.a{color:var(--amber)} .led.g{color:var(--green)}
 
-  /* Hidden until recording — an empty panel above a result card reads as a
-     broken widget. Internal resolution is fixed at 180x64 and stretched, so
-     one column per animation frame lands on one pixel column. */
-  /* y is frequency, x is time — an earlier version labelled the horizontal
-     axis 15k..0, which described neither. */
-  #specWrap { display: none; position: relative; width: 92%; margin-top: 8px; }
-  #specWrap.on { display: block; }
-  #spec {
-    display: block; width: 100%; height: 64px;
-    background: #0d0d0f; border: 1px solid #26262c; border-radius: 2px;
-    image-rendering: pixelated;
-  }
-  .fl {
-    position: absolute; font-size: 8px; color: #9A9AA5;
-    text-shadow: 0 0 3px #0d0d0f, 0 0 3px #0d0d0f; pointer-events: none;
-  }
-  .fl.top { left: 2px; top: 1px; }
-  .fl.bot { left: 2px; bottom: 1px; }
-  .fl.rt  { right: 2px; bottom: 1px; }
+  .view { flex:1; min-height:0; display:none; flex-direction:column; }
+  .view.on { display:flex; }
+  .mid { flex:1; min-height:0; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; padding:6px; }
 
-  #card { width: 100%; display: none; }
-  #card.on { display: block; }
-  #common { font-size: 15px; line-height: 1.15; color: #fff; word-wrap: break-word; }
-  #sci { font-size: 9px; color: #8a7a66; font-style: italic; margin-top: 2px; }
-  #conf {
-    margin-top: 6px; height: 6px; background: #26262c;
-    border-radius: 3px; overflow: hidden;
-  }
-  #confFill { height: 100%; width: 0; background: #F59E0B; }
-  #confTxt { font-size: 9px; color: #9A9AA5; margin-top: 2px; }
-  #badge {
-    display: none; margin-top: 5px; font-size: 10px; font-weight: bold;
-    color: #0d0d0f; background: #4ade80; padding: 2px 6px;
-    border-radius: 3px; letter-spacing: .08em;
-  }
-  #badge.on { display: inline-block; }
-  /* Non-bird catches are the surprise, so they get a colour of their own. */
-  #taxon { display: none; margin-left: 4px; font-size: 9px; font-weight: bold;
-           padding: 2px 5px; border-radius: 3px; letter-spacing: .08em;
-           color: #0d0d0f; vertical-align: 2px; }
-  #taxon.on { display: inline-block; }
-  .t-amphibian { background: #4DA6FF; }
-  .t-insect    { background: #C792EA; }
-  .t-mammal    { background: #F59E0B; }
-  .entry .tx { flex: 0 0 auto; font-size: 8px; letter-spacing: .06em; }
-  .tx-amphibian { color: #4DA6FF; }
-  .tx-insect    { color: #C792EA; }
-  .tx-mammal    { color: #F59E0B; }
-  #rarity { margin-top: 5px; font-size: 9px; color: #9A9AA5; letter-spacing: .04em; }
-  #rarity .pip { color: #F59E0B; letter-spacing: 2px; }
-  /* Off-range is the shiny-Pokemon moment: a confident detection the range
-     model says should not be here at all. Worth a second look, so it shouts. */
-  #rarity.anomaly { color: #FF5C6E; font-weight: bold; }
-  /* pre-line: runners-up are newline-joined and must stay one per line. */
-  #alts { margin-top: 6px; font-size: 9px; color: #7E7E88; white-space: pre-line; }
+  /* ---- mode rail ---- */
+  #rail { flex:0 0 auto; display:flex; height:20px;
+          border-top:1px solid var(--line); background:var(--panel); }
+  .cell { flex:1 1 0; display:flex; align-items:center; justify-content:center;
+          font-size:9px; letter-spacing:.08em; color:var(--ink3);
+          clip-path:polygon(0 0,100% 0,calc(100% - 6px) 100%,0 100%); }
+  .cell.sel { background:linear-gradient(180deg,#F5B33F,var(--amber) 55%,var(--amber-dk));
+              color:#0D0D0F; font-weight:bold; }
+  .cell.press { background:linear-gradient(180deg,#fff,var(--amber)); color:#0D0D0F; }
 
-  /* ---- dex ---- */
-  #dexList { flex: 1; min-height: 0; overflow-y: auto; padding: 3px 5px; }
-  .entry { display: flex; gap: 5px; align-items: baseline; padding: 3px 0;
-           border-bottom: 1px solid #1b1b20; }
-  .entry .nm { flex: 1 1 auto; color: #e8e8ea; word-break: break-word; }
-  .entry .ct { flex: 0 0 auto; color: #F59E0B; font-size: 10px; }
-  .entry .cf { flex: 0 0 auto; color: #7E7E88; font-size: 9px; width: 26px;
-               text-align: right; }
-  #empty { color: #7E7E88; text-align: center; padding: 20px 8px; font-size: 10px; }
+  /* ---- boot ---- */
+  .lensBig { width:40px; height:40px; }
+  #bootTxt { margin-top:10px; font-size:11px; color:var(--amber); letter-spacing:.06em; }
+  #bootSub { margin-top:3px; font-size:9px; color:var(--ink3); }
+  .meter { width:80%; height:5px; margin-top:8px; background:var(--sunk);
+           border:1px solid var(--line); border-radius:2px; overflow:hidden; }
+  .meter i { display:block; height:100%; width:0;
+             background:linear-gradient(180deg,#FFC24D,var(--amber) 40%,var(--amber-dk)); }
 
-  #foot {
-    flex: 0 0 auto; padding: 3px 5px; border-top: 1px solid #26262c;
-    font-size: 9px; color: #7E7E88; text-align: center;
-  }
+  /* ---- home ---- */
+  #stats { width:100%; margin-top:10px; font-size:9px; }
+  .srow { display:flex; gap:6px; padding:2px 0; border-bottom:1px solid #1B1B20; }
+  .srow b { color:var(--ink3); font-weight:normal; flex:0 0 44px; letter-spacing:.06em; }
+  .srow span { flex:1 1 auto; text-align:right; }
 
-  /* ---- zip picker ----
-     No keyboard exists on this device, so a ZIP is entered one digit at a
-     time on the wheel. The reel only offers digits that can still complete
-     to a real US prefix, which cuts the search space hard at every slot. */
-  #zipStage { flex: 1; min-height: 0; display: flex; flex-direction: column;
-              align-items: center; justify-content: center; padding: 6px; }
-  #zipTitle { font-size: 10px; color: #F59E0B; letter-spacing: .08em; }
-  #zipDigits { margin-top: 10px; font-size: 22px; letter-spacing: 4px; color: #e8e8ea; }
-  #zipDigits .cur { color: #0d0d0f; background: #F59E0B; padding: 0 3px; border-radius: 2px; }
-  #zipDigits .pend { color: #7E7E88; }
-  #zipWhere { margin-top: 10px; font-size: 10px; color: #4ade80; min-height: 13px; }
-  #zipHint { margin-top: 4px; font-size: 9px; color: #7E7E88; }
-  #zipFoot { flex: 0 0 auto; padding: 3px 5px; border-top: 1px solid #26262c;
-             font-size: 9px; color: #7E7E88; text-align: center; }
+  /* ---- capture ---- */
+  #specWrap { position:relative; width:100%; }
+  #spec { display:block; width:100%; height:104px; image-rendering:pixelated;
+          background:var(--sunk); border:1px solid var(--line-hi); border-radius:2px;
+          box-shadow:inset 0 1px 0 rgba(0,0,0,.8); }
+  .fl { position:absolute; font-size:8px; color:var(--ink2); pointer-events:none;
+        text-shadow:0 0 3px var(--sunk),0 0 3px var(--sunk); }
+  .fl.t{left:2px;top:1px} .fl.b{left:2px;bottom:1px} .fl.r{right:2px;bottom:1px}
+  #count { margin-top:6px; font-size:30px; line-height:1; color:var(--amber); }
+  #capMsg { margin-top:3px; font-size:9px; color:var(--ink2); letter-spacing:.1em; }
+
+  /* ---- result ---- */
+  #resWrap { flex:1; min-height:0; overflow:hidden; padding:5px; }
+  #photo { float:left; width:56px; height:56px; margin:0 6px 3px 0; border-radius:2px;
+           background:var(--sunk); border:1px solid var(--line-hi);
+           display:flex; align-items:center; justify-content:center;
+           font-size:8px; color:var(--ink3); overflow:hidden; }
+  .chip { display:inline-block; font-size:9px; font-weight:bold; padding:1px 5px;
+          border-radius:3px; letter-spacing:.06em; color:#0D0D0F; margin:0 3px 2px 0; }
+  .chip.new{background:var(--green)} .chip.amphibian{background:var(--blue)}
+  .chip.insect{background:var(--violet)} .chip.mammal{background:var(--amber)}
+  .chip.warn{background:var(--ink3)}
+  #conf { margin-top:3px; height:6px; background:var(--sunk);
+          border:1px solid var(--line); border-radius:3px; overflow:hidden; }
+  #conf i { display:block; height:100%; width:0;
+            background:linear-gradient(180deg,#FFC24D,var(--amber) 40%,var(--amber-dk)); }
+  #confTxt { font-size:9px; color:var(--ink2); margin-top:2px; }
+  #band4 { font-size:11px; font-weight:bold; letter-spacing:.06em; }
+  .b-confident{color:var(--green)} .b-pretty{color:var(--amber)}
+  .b-maybe{color:var(--violet)} .b-notsure{color:var(--ink3)}
+  #common { clear:both; padding-top:4px; font-size:16px; line-height:1.15;
+            color:#fff; overflow-wrap:anywhere; }
+  #sci { font-size:9px; color:var(--ink3); font-style:italic; }
+  hr.rule { border:0; border-top:1px solid var(--line); margin:5px 0; }
+  #rarity { font-size:9px; color:var(--ink2); letter-spacing:.04em; }
+  #rarity .pip { color:var(--amber); letter-spacing:2px; }
+  /* Off-range is the shiny-Pokemon moment: the range model says this should
+     not be here at all, which makes it the detection worth a second look. */
+  #rarity.anomaly { color:var(--red-txt); font-weight:bold; }
+  #alts { font-size:9px; color:var(--ink3); white-space:pre-line; margin-top:3px; }
+
+  /* ---- lists ---- */
+  .list { flex:1; min-height:0; overflow-y:auto; }
+  .row { display:flex; gap:5px; align-items:baseline; padding:3px 5px;
+         border-bottom:1px solid #1B1B20; }
+  .row.sel { background:var(--sel); box-shadow:inset 3px 0 0 var(--amber); }
+  .row .nm { flex:1 1 auto; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .row .rt { flex:0 0 auto; color:var(--ink3); font-size:9px; }
+  .row .ct { flex:0 0 auto; color:var(--amber); font-size:10px; }
+  .tx { font-size:8px; letter-spacing:.06em; }
+  .tx.amphibian{color:var(--blue)} .tx.insect{color:var(--violet)} .tx.mammal{color:var(--amber)}
+  .hint { padding:14px 8px; text-align:center; font-size:10px; color:var(--ink3);
+          white-space:pre-line; }
+
+  /* ---- zip reel ---- */
+  #zipDigits { margin-top:8px; font-size:22px; letter-spacing:4px; }
+  #zipDigits span { padding:0 2px; }
+  #zipDigits .cur { color:#0D0D0F; background:var(--amber); border-radius:2px; }
+  #zipDigits .pend { color:var(--ink3); }
+  #zipWhere { margin-top:10px; font-size:10px; color:var(--green); min-height:13px; }
+  #zipHint { margin-top:3px; font-size:9px; color:var(--ink3); }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="bar">
-    <span id="title">POKEDEX</span>
-    <!-- Which hardware events this firmware actually dispatches is unverified.
-         Holding PTT does nothing on-device, so show the last event received
-         rather than guessing at why. -->
-    <span id="hw" class="sp"></span>
-    <span id="status" class="warn">booting</span>
+  <div id="band">
+    <span class="lens"></span>
+    <span id="bandTitle">POKEDEX</span>
+    <span id="leds">
+      <span class="led r" id="led0"></span>
+      <span class="led a" id="led1"></span>
+      <span class="led g" id="led2"></span>
+    </span>
   </div>
 
-  <div id="listen" class="view on">
-    <div id="stage">
-      <div id="state">STARTING</div>
-      <div id="sub">loading model</div>
-      <div id="specWrap">
-        <canvas id="spec" width="180" height="64"></canvas>
-        <span class="fl top">15k</span>
-        <span class="fl bot">0Hz</span>
-        <span class="fl rt">3s</span>
-      </div>
-      <div id="card">
-        <div id="common"></div>
-        <div id="sci"></div>
-        <div id="conf"><div id="confFill"></div></div>
-        <div id="confTxt"></div>
-        <div id="badge">NEW</div><span id="taxon"></span>
-        <div id="rarity"></div>
-        <div id="alts"></div>
-      </div>
+  <div id="v-boot" class="view on">
+    <div class="mid">
+      <span class="lens lensBig"></span>
+      <div id="bootTxt">INITIALISING</div>
+      <div id="bootSub">loading model</div>
+      <div class="meter"><i id="bootBar"></i></div>
     </div>
-    <div id="foot">PTT listen &middot; scroll for dex</div>
   </div>
 
-  <div id="zipv" class="view">
-    <div id="zipStage">
-      <div id="zipTitle">ENTER ZIP</div>
+  <div id="v-home" class="view">
+    <div class="mid">
+      <div style="font-size:11px;color:var(--ink2);letter-spacing:.1em">STANDBY</div>
+      <div style="margin-top:3px;font-size:9px;color:var(--ink3)">press PTT to scan</div>
+      <div id="stats"></div>
+    </div>
+  </div>
+
+  <div id="v-cap" class="view">
+    <div class="mid">
+      <div id="specWrap">
+        <canvas id="spec" width="180" height="104"></canvas>
+        <span class="fl t">15k</span><span class="fl b">0Hz</span><span class="fl r">3s</span>
+      </div>
+      <div id="count">3.0</div>
+      <div id="capMsg">HOLD STILL</div>
+    </div>
+  </div>
+
+  <div id="v-res" class="view">
+    <div id="resWrap">
+      <div id="photo">NO IMG</div>
+      <div id="chips"></div>
+      <div id="band4"></div>
+      <div id="conf"><i id="confFill"></i></div>
+      <div id="confTxt"></div>
+      <div id="common"></div>
+      <div id="sci"></div>
+      <hr class="rule">
+      <div id="rarity"></div>
+      <div id="alts"></div>
+    </div>
+  </div>
+
+  <div id="v-dex" class="view"><div id="dexList" class="list"></div></div>
+  <div id="v-cfg" class="view"><div id="cfgList" class="list"></div></div>
+
+  <div id="v-zip" class="view">
+    <div class="mid">
+      <div style="font-size:10px;color:var(--amber);letter-spacing:.08em">ENTER ZIP</div>
       <div id="zipDigits"></div>
       <div id="zipWhere"></div>
       <div id="zipHint"></div>
     </div>
-    <div id="zipFoot">wheel = digit &middot; PTT = next</div>
   </div>
 
-  <div id="dex" class="view">
-    <div id="dexList"></div>
-    <div id="foot2" class="" style="flex:0 0 auto;padding:3px 5px;border-top:1px solid #26262c;font-size:9px;color:#7E7E88;text-align:center;">PTT to go back</div>
-  </div>
+  <div id="rail"></div>
 </div>
 
 <script>
-/* r1 Pokedex — offline bird identification.
+/* r1 Pokedex.
  *
- * Everything here is shaped by measurements in the README, not guesses:
- *   * 48 kHz mono with AGC/NS/AEC defeated is BirdNET V2.4's native input,
- *     so 3 s = exactly 144000 float samples with no resampling.
- *   * SDK wrappers are LATE-INJECTED. Checking window.creationStorage at
- *     startup returns false and then true a moment later — that single
- *     mistake is what made three rabbit APIs look missing for a week.
- *   * Eight rapid PTT taps shut the device down, hence the trigger lockout.
- *   * Never preventDefault a touch event; pointer events only.
- *   * Confidence is NOT portable from desktop (0.81 there, 0.69 here for the
- *     identical clip), so THRESHOLD must be tuned on the device.
+ * INPUT MODEL. The hardware gives one commit signal (sideClick) and one axis
+ * (the wheel). Every screen is therefore the same machine: the wheel moves a
+ * focus cursor through an ordered list, PTT activates whatever is focused, and
+ * since there is no back button, BACK is itself always a focusable. The single
+ * deliberate exception is that HOME and RESULT default focus to SCAN, so a
+ * cold press is always "record" — the only thing you do with a bird actually
+ * singing in front of you.
+ *
+ * Constraints below are measured, not stylistic (see README):
+ *   * 48 kHz mono, AGC/NS/AEC off, 3 s = exactly 144000 samples, no resampling
+ *   * never preventDefault a touch event — it crashes this WebView ~3 s later
+ *   * eight rapid PTT taps shut the device down, hence the trigger lockout
+ *   * creationStorage is LATE-INJECTED; a startup check reads false then true
+ *   * confidence does not transfer from desktop (0.81 there, 0.69 here)
  */
 
-var SAMPLES = 144000;          // 3 s @ 48 kHz — the model's fixed input
-var RATE = 48000;
-var THRESHOLD = 0.15;          // tune ON DEVICE; desktop values do not transfer
-var LOCKOUT_MS = 800;          // guards the eight-rapid-taps shutdown
-var DEX_KEY = 'pokedex_v1';
+var SAMPLES = 144000, RATE = 48000;
+var LOCKOUT_MS = 800;
+var DEX_KEY = 'pokedex_v1', ZIP_KEY = 'pokedex_zip';
 
-var el = function (id) { return document.getElementById(id); };
-var worker = null, ready = false, busy = false, lastTrigger = 0;
-var dex = {}, store = null, view = 'listen';
-
-/* ---------- taxonomy ----------
-   BirdNET is not only birds: 41 amphibians, 40 insects and 7 mammals are in
-   the label set, and were being filed as birds. Classified by GENUS, not by
-   common name — name matching pulls in Bee-eaters, Grasshopper Warblers,
-   Squirrel Cuckoo, Fox Sparrow and Killdeer, 35 false positives in all. */
-var TAXA = {};                       // genus -> amphibian|insect|mammal
-var TAXON_ICON  = { bird: '', amphibian: 'AMPHIBIAN', insect: 'INSECT', mammal: 'MAMMAL' };
-// Distinct 3-letter codes, not truncations of the full word — slicing gave
-// "INSE" and "MAMM", which read as bugs rather than labels.
-var TAXON_SHORT = { bird: '', amphibian: 'AMP', insect: 'INS', mammal: 'MAM' };
-
-function taxonOf(sci) {
-  return TAXA[String(sci).split(' ')[0]] || 'bird';
-}
-
-/* ---------- range / rarity ----------
-   The range model reports eBird CHECKLIST FREQUENCY — how often birders
-   report a species here — not abundance. Rock Pigeon lands in "Rare" at
-   Ithaca because nobody bothers logging pigeons. Word the UI accordingly. */
-var ZIP3 = {};                  // "941" -> [lat, lon]
-var zip = null;                 // saved 5-digit string
-var nearby = null;              // [{sci, common, score}] for the saved ZIP
-var geoTiers = null;
-
-// Tier cuts are measured across 8 US cities x 4 seasons, not guessed.
-var TIERS = [
-  [0.30,   'COMMON',      5],
-  [0.08,   'UNCOMMON',    4],
-  [0.02,   'RARE',        3],
-  [0.0025, 'VERY RARE',   2],
-  [0,      'EXCEPTIONAL', 1]
+/* Confidence bands. These are DEVICE numbers and do not port: the r1 reads
+   ~15% below desktop on identical audio (0.69 vs 0.81), so a desktop 0.5 is
+   about 0.43 here.
+   For scale: BirdNET's own 0.1 default is a BULK-ANALYSIS setting meant to be
+   post-filtered, not a bar for trusting one detection — common practice for
+   that is 0.5+. An earlier version of this file recorded at 0.15, which was
+   far too generous for a permanent collection entry. */
+var BANDS = [
+  [0.65, 'CONFIDENT',   'b-confident'],
+  [0.45, 'PRETTY SURE', 'b-pretty'],
+  [0.25, 'MAYBE',       'b-maybe'],
+  [0.10, 'NOT SURE',    'b-notsure']
 ];
+/* What counts as "caught". Adjustable in CFG because this is precisely the
+   parameter that has to be calibrated against real birds on the real device —
+   junk hits mean raise it, missed birds mean lower it. */
+var SAVE_LEVELS = [
+  [0.25, 'MAYBE'],
+  [0.45, 'PRETTY SURE'],
+  [0.65, 'CONFIDENT']
+];
+var saveLevel = 1;                        // default: PRETTY SURE
+function recordMin() { return SAVE_LEVELS[saveLevel][0]; }
+var SHOW_MIN = 0.10;                      // below this we report hearing nothing
+var SAVE_KEY = 'pokedex_savelvl';
 
-function rarityOf(score) {
-  if (score === null || score === undefined) { return null; }
-  if (score < 0) { return { label: 'OFF-RANGE', pips: 0, anomaly: true }; }
-  for (var i = 0; i < TIERS.length; i++) {
-    if (score >= TIERS[i][0]) {
-      return { label: TIERS[i][1], pips: TIERS[i][2], anomaly: false };
-    }
+function bandOf(c) {
+  for (var i = 0; i < BANDS.length; i++) {
+    if (c >= BANDS[i][0]) { return { label:BANDS[i][1], cls:BANDS[i][2] }; }
   }
   return null;
 }
 
-function pips(n) {
-  var s = '';
-  for (var i = 0; i < 5; i++) { s += (i < n ? '*' : '.'); }
-  return s;
-}
+var el = function (id) { return document.getElementById(id); };
+var worker = null, ready = false, busy = false, lastTrigger = 0, lastCommit = 0;
+var dex = {}, store = null, zip = null, nearby = null;
+var TAXA = {}, ZIP3 = {};
+var view = 'boot', focus = 0;
 
-/* The model wants a 48-week year (4 per month), NOT 52. Upstream computes
-   (now - Jan1)/7days + 1, which reaches 53 and extrapolates past the trained
-   domain. And week = -1 is documented as year-round but aliases to late
-   November in this export, so never pass it. */
+var TAXON_LONG  = { bird:'', amphibian:'AMPHIBIAN', insect:'INSECT', mammal:'MAMMAL' };
+var TAXON_SHORT = { bird:'', amphibian:'AMP', insect:'INS', mammal:'MAM' };
+function taxonOf(sci) { return TAXA[String(sci).split(' ')[0]] || 'bird'; }
+
+/* ---------- rarity ----------
+   The range model reports eBird CHECKLIST FREQUENCY — how often birders report
+   a species here — not abundance. Rock Pigeon reads "rare" in cities because
+   nobody logs pigeons, so the copy says "birders report", never "is rare".
+   Tier cuts are measured across 8 US cities x 4 seasons. */
+var TIERS = [[0.30,'COMMON',5],[0.08,'UNCOMMON',4],[0.02,'RARE',3],
+             [0.0025,'VERY RARE',2],[0,'EXCEPTIONAL',1]];
+function rarityOf(s) {
+  if (s === null || s === undefined) { return null; }
+  if (s < 0) { return { label:'OFF-RANGE', pips:0, anomaly:true }; }
+  for (var i = 0; i < TIERS.length; i++) {
+    if (s >= TIERS[i][0]) { return { label:TIERS[i][1], pips:TIERS[i][2], anomaly:false }; }
+  }
+  return null;
+}
+function pips(n) { var s = ''; for (var i = 0; i < 5; i++) { s += i < n ? '*' : '.'; } return s; }
+
+/* The model wants a 48-week year, NOT 52. Upstream computes (now-Jan1)/7+1,
+   which reaches 53 and extrapolates past the trained domain. week=-1 reads as
+   year-round in the docs but the mask is a constant in this export, so it
+   silently aliases to late November — never pass it. */
 function week48(d) {
   d = d || new Date();
-  return (d.getMonth()) * 4 + Math.min(3, Math.floor((d.getDate() - 1) / 7)) + 1;
+  return d.getMonth() * 4 + Math.min(3, Math.floor((d.getDate() - 1) / 7)) + 1;
 }
 
-function requestGeo() {
-  if (!zip || !ready || !worker) { return; }
-  var ll = ZIP3[zip.slice(0, 3)];
-  if (!ll) { return; }
-  worker.postMessage({ message: 'geo', lat: ll[0], lon: ll[1], week: week48() });
+function leds(r, a, g) {
+  el('led0').className = 'led r' + (r ? ' on' : '');
+  el('led1').className = 'led a' + (a === 2 ? ' on blink' : a ? ' on' : '');
+  el('led2').className = 'led g' + (g ? ' on' : '');
 }
+function title(t) { el('bandTitle').textContent = t; }
 
-/* ---------- status ---------- */
-function status(text, cls) {
-  el('status').textContent = text;
-  el('status').className = 'sp ' + (cls || '');
-}
-function stage(state, sub) {
-  el('state').textContent = state;
-  el('sub').textContent = sub || '';
-}
-
-/* ---------- storage ----------
-   creationStorage is host-backed and survives relaunch (verified with launch
-   counters). localStorage also survived, so it is a real fallback rather than
-   a token one — but prefer the host store, which is what it exists for. */
+/* ---------- storage ---------- */
 function b64enc(s) { return btoa(unescape(encodeURIComponent(s))); }
 function b64dec(s) { return decodeURIComponent(escape(atob(s))); }
 
-function whenSDKReady(cb, timeoutMs) {
+function whenSDKReady(cb, ms) {
   var t0 = Date.now();
   (function tick() {
     if (window.creationStorage && window.creationStorage.plain) { return cb(true); }
-    if (Date.now() - t0 > (timeoutMs || 8000)) { return cb(false); }
+    if (Date.now() - t0 > (ms || 8000)) { return cb(false); }
     setTimeout(tick, 50);
   })();
 }
-
-function makeStore(useHost) {
-  if (useHost) {
+function makeStore(host) {
+  if (host) {
     var s = window.creationStorage.plain;
-    return {
-      kind: 'creationStorage',
-      get: function () {
-        return Promise.resolve(s.getItem(DEX_KEY)).then(function (v) {
-          return v ? JSON.parse(b64dec(v)) : {};
-        });
-      },
-      set: function (obj) {
-        return Promise.resolve(s.setItem(DEX_KEY, b64enc(JSON.stringify(obj))));
-      }
-    };
+    return { kind:'creationStorage',
+      get:function (k) { return Promise.resolve(s.getItem(k))
+        .then(function (v) { return v ? b64dec(v) : null; }); },
+      set:function (k, v) { return Promise.resolve(s.setItem(k, b64enc(v))); } };
   }
-  return {
-    kind: 'localStorage',
-    get: function () {
-      try {
-        var v = localStorage.getItem(DEX_KEY);
-        return Promise.resolve(v ? JSON.parse(v) : {});
-      } catch (e) { return Promise.resolve({}); }
-    },
-    set: function (obj) {
-      try { localStorage.setItem(DEX_KEY, JSON.stringify(obj)); } catch (e) {}
-      return Promise.resolve();
-    }
-  };
+  return { kind:'localStorage',
+    get:function (k) { try { return Promise.resolve(localStorage.getItem(k)); }
+                       catch (e) { return Promise.resolve(null); } },
+    set:function (k, v) { try { localStorage.setItem(k, v); } catch (e) {}
+                          return Promise.resolve(); } };
 }
+function saveDex() { if (store) { store.set(DEX_KEY, JSON.stringify(dex)); } }
 
-/* ---------- dex ---------- */
-function renderDex() {
-  var list = el('dexList');
-  list.innerHTML = '';
-  var keys = Object.keys(dex);
-  if (!keys.length) {
-    var d = document.createElement('div');
-    d.id = 'empty';
-    d.textContent = 'no birds yet\nhold PTT near a bird';
-    list.appendChild(d);
-    el('title').textContent = 'DEX 0';
-    return;
-  }
-  keys.sort(function (a, b) { return dex[b].last - dex[a].last; });
-  el('title').textContent = nearby
-    ? 'DEX ' + keys.length + '/' + nearby.length
-    : 'DEX ' + keys.length;
-  keys.forEach(function (k) {
-    var e = dex[k];
-    var row = document.createElement('div');
-    row.className = 'entry';
-    var nm = document.createElement('span');
-    nm.className = 'nm'; nm.textContent = e.common;
-    var ct = document.createElement('span');
-    ct.className = 'ct'; ct.textContent = 'x' + e.count;
-    var cf = document.createElement('span');
-    cf.className = 'cf'; cf.textContent = e.best.toFixed(2);
-    var tax = e.taxon || taxonOf(e.sci);
-    if (tax !== 'bird') {
-      var tx = document.createElement('span');
-      tx.className = 'tx tx-' + tax;
-      tx.textContent = TAXON_SHORT[tax];
-      row.appendChild(nm); row.appendChild(tx);
-    } else {
-      row.appendChild(nm);
-    }
-    row.appendChild(ct); row.appendChild(cf);
-    list.appendChild(row);
-  });
-}
-
-function record(bird) {
-  var k = bird.sci;
-  var isNew = !dex[k];
-  var e = dex[k] || { common: bird.common, sci: bird.sci, taxon: taxonOf(bird.sci),
-                      count: 0, best: 0, first: Date.now() };
-  if (!e.taxon) { e.taxon = taxonOf(bird.sci); }   // backfill pre-taxon records
-  if (bird.geo !== null && bird.geo !== undefined) { e.geo = bird.geo; }
-  e.count++;
-  e.last = Date.now();
-  if (bird.confidence > e.best) { e.best = bird.confidence; }
-  dex[k] = e;
-  store.set(dex);
+function record(b) {
+  var k = b.sci, isNew = !dex[k];
+  var e = dex[k] || { common:b.common, sci:b.sci, taxon:taxonOf(b.sci),
+                      count:0, best:0, first:Date.now() };
+  if (!e.taxon) { e.taxon = taxonOf(b.sci); }
+  e.count++; e.last = Date.now();
+  if (b.confidence > e.best) { e.best = b.confidence; }
+  if (b.geo !== null && b.geo !== undefined) { e.geo = b.geo; }
+  dex[k] = e; saveDex();
   return isNew;
 }
 
-/* ---------- audio ---------- */
-/* The r1 mic is 48 kHz mono and lets AGC / noise-suppression / echo-cancel
-   all be disabled — which is exactly BirdNET's native input. Measured peak
-   was 0.0175, i.e. quiet; the model's mel front-end normalises per chunk, so
-   low level is fine, but the meter is there to prove audio is arriving. */
-/* Every await here is bounded. The first version timed out only AFTER
+/* ---------- audio ----------
+   Every await is bounded. An earlier version armed its timeout only AFTER
    getUserMedia resolved, so a permission prompt that never returned left the
-   UI on LISTENING forever with nothing to explain it. */
+   UI listening forever with nothing to explain it. */
 function withTimeout(p, ms, what) {
-  return new Promise(function (resolve, reject) {
+  return new Promise(function (res, rej) {
     var done = false;
     var t = setTimeout(function () {
-      if (!done) { done = true; reject(new Error('timeout: ' + what)); }
-    }, ms);
-    p.then(function (v) { if (!done) { done = true; clearTimeout(t); resolve(v); } },
-           function (e) { if (!done) { done = true; clearTimeout(t); reject(e); } });
+      if (!done) { done = true; rej(new Error('timeout: ' + what)); } }, ms);
+    p.then(function (v) { if (!done) { done = true; clearTimeout(t); res(v); } },
+           function (e) { if (!done) { done = true; clearTimeout(t); rej(e); } });
   });
 }
 
-/* ---------- spectrogram ---------- */
-var specCv = null, sctx = null, specX = 0;
-
+var sctx = null, specX = 0;
 function specReset() {
-  specCv = el('spec');
-  sctx = specCv.getContext('2d');
-  sctx.fillStyle = '#0d0d0f';
-  sctx.fillRect(0, 0, specCv.width, specCv.height);
-  specX = 0;
+  var c = el('spec'); sctx = c.getContext('2d');
+  sctx.fillStyle = '#08080A'; sctx.fillRect(0, 0, c.width, c.height); specX = 0;
 }
-// Dark -> amber -> white. Bird calls sit well above the noise floor, so a
-// simple ramp separates them clearly without a full colormap.
 function heat(v) {
-  if (v < 0.5) {
-    var a = v / 0.5;
-    return 'rgb(' + ((13 + a * 232) | 0) + ',' + ((13 + a * 145) | 0) + ',' + ((15 - a * 4) | 0) + ')';
-  }
+  if (v < 0.5) { var a = v / 0.5;
+    return 'rgb(' + ((13+a*232)|0) + ',' + ((13+a*145)|0) + ',' + ((15-a*4)|0) + ')'; }
   var b = (v - 0.5) / 0.5;
-  return 'rgb(245,' + ((158 + b * 97) | 0) + ',' + ((11 + b * 244) | 0) + ')';
+  return 'rgb(245,' + ((158+b*97)|0) + ',' + ((11+b*244)|0) + ')';
 }
-/* Drawn against capture progress, not frame rate. Tying columns to
-   requestAnimationFrame made the panel fill at whatever rate the device
-   happened to render — ~10 columns of 180 in 1.6 s on a throttled tab. The
-   panel represents a fixed 3 s window, so column position is progress. */
-function specDrawTo(progress, data, maxBin) {
-  var H = specCv.height, W = specCv.width;
-  var target = Math.min(W - 1, (progress * W) | 0);
+/* Columns advance with CAPTURE PROGRESS, not frame rate. Driving them from
+   requestAnimationFrame filled the panel at whatever rate the device happened
+   to render — ~10 of 180 columns in 1.6 s on a throttled tab. */
+function specDrawTo(prog, data, maxBin) {
+  var c = el('spec'), H = c.height, W = c.width;
+  var target = Math.min(W - 1, (prog * W) | 0);
   while (specX <= target) {
     for (var y = 0; y < H; y++) {
-      var bin = ((1 - y / H) * maxBin) | 0;   // low frequencies at the bottom
-      var v = data[bin] / 255;
-      sctx.fillStyle = heat(v * v);            // square it: suppress the floor
+      var v = data[((1 - y / H) * maxBin) | 0] / 255;
+      sctx.fillStyle = heat(v * v);        // square it: suppress the noise floor
       sctx.fillRect(specX, y, 1, 1);
     }
     specX++;
   }
 }
 
-function capture(onProgress) {
-  var stream = null, ctx = null, src = null, node = null, analyser = null, raf = 0;
-
+function capture(onProg) {
+  var stream = null, ctx = null, src = null, node = null, an = null, raf = 0;
   function teardown() {
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
-    try { node && node.disconnect(); } catch (e) {}
-    try { src && src.disconnect(); } catch (e) {}
+    try { node && node.disconnect(); src && src.disconnect(); } catch (e) {}
     try { ctx && ctx.close(); } catch (e) {}
     if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
   }
-
-  // Bounded: on the r1 a permission prompt may never resolve at all.
-  return withTimeout(navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1, sampleRate: RATE,
-      echoCancellation: false, noiseSuppression: false, autoGainControl: false
-    }
-  }), 7000, 'mic permission').then(function (s) {
+  return withTimeout(navigator.mediaDevices.getUserMedia({ audio:{
+      channelCount:1, sampleRate:RATE,
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false
+    }}), 7000, 'mic permission').then(function (s) {
     stream = s;
     var AC = window.AudioContext || window.webkitAudioContext;
-    ctx = new AC({ sampleRate: RATE });
-    // A suspended context never fires audio callbacks — silent stall.
-    return (ctx.state === 'suspended' ? ctx.resume() : Promise.resolve());
+    ctx = new AC({ sampleRate:RATE });
+    // A suspended context never fires audio callbacks — a silent stall.
+    return ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
   }).then(function () {
     if (Math.abs(ctx.sampleRate - RATE) > 1) {
       // Resampling silently would corrupt the model's input. Fail loudly.
       throw new Error('mic at ' + ctx.sampleRate + 'Hz, need ' + RATE);
     }
-
     src = ctx.createMediaStreamSource(stream);
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;               // 512 bins over 0..24 kHz
-    analyser.smoothingTimeConstant = 0.35;
+    an = ctx.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.35;
     node = ctx.createScriptProcessor(4096, 1, 1);
-
-    var buf = new Float32Array(SAMPLES);
-    var n = 0;
-    // BirdNET's mel front-end tops out around 15 kHz; showing 0..24 kHz would
-    // waste half the panel on band the model ignores.
-    var maxBin = Math.round(15000 / (RATE / 2) * analyser.frequencyBinCount);
-    var freq = new Uint8Array(analyser.frequencyBinCount);
-
+    var buf = new Float32Array(SAMPLES), n = 0;
+    // BirdNET's mel front-end tops out near 15 kHz; showing 0..24 would waste
+    // half the panel on band the model ignores.
+    var maxBin = Math.round(15000 / (RATE / 2) * an.frequencyBinCount);
+    var freq = new Uint8Array(an.frequencyBinCount);
     specReset();
-
-    return new Promise(function (resolve, reject) {
-      var finished = false;
-      var gotAudio = false;
-      function finish(err) {
-        if (finished) { return; }
-        finished = true;
-        teardown();
-        if (err) { reject(err); } else { resolve(buf); }
+    return new Promise(function (res, rej) {
+      var fin = false, got = false;
+      function done(err) {
+        if (fin) { return; } fin = true; teardown();
+        if (err) { rej(err); } else { res(buf); }
       }
-
       node.onaudioprocess = function (ev) {
-        if (finished) { return; }
-        gotAudio = true;
+        if (fin) { return; }
+        got = true;
         var inp = ev.inputBuffer.getChannelData(0);
         for (var i = 0; i < inp.length && n < SAMPLES; i++) { buf[n++] = inp[i]; }
-        if (onProgress) { onProgress(n / SAMPLES); }
-        if (n >= SAMPLES) { finish(null); }
+        if (onProg) { onProg(n / SAMPLES); }
+        if (n >= SAMPLES) { done(null); }
       };
-
       function draw() {
-        if (finished) { return; }
-        analyser.getByteFrequencyData(freq);
+        if (fin) { return; }
+        an.getByteFrequencyData(freq);
         specDrawTo(n / SAMPLES, freq, maxBin);
         raf = requestAnimationFrame(draw);
       }
-
-      src.connect(analyser);
-      src.connect(node);
-      node.connect(ctx.destination);
+      src.connect(an); src.connect(node); node.connect(ctx.destination);
       raf = requestAnimationFrame(draw);
-
-      // Distinguish "mic never delivered a sample" from "capture is slow".
-      setTimeout(function () {
-        if (!gotAudio && !finished) { finish(new Error('mic delivered no audio')); }
-      }, 2500);
-      setTimeout(function () {
-        if (!finished) { finish(new Error('capture stalled at ' + n + '/' + SAMPLES)); }
-      }, 9000);
+      // Distinguish "mic delivered nothing" from "capture is slow".
+      setTimeout(function () { if (!got && !fin) { done(new Error('mic delivered no audio')); } }, 2500);
+      setTimeout(function () { if (!fin) { done(new Error('capture stalled at ' + n)); } }, 9000);
     });
-  }).catch(function (e) {
-    teardown();
-    throw e;
-  });
+  }).catch(function (e) { teardown(); throw e; });
 }
 
 /* ---------- identify ---------- */
@@ -535,91 +463,347 @@ function identify() {
   // Eight rapid PTT taps shut the r1 down. We cannot stop the taps reaching
   // the device, but we refuse to pile work on top of them.
   if (now - lastTrigger < LOCKOUT_MS) { return; }
-  lastTrigger = now;
+  lastTrigger = now; busy = true;
 
-  busy = true;
-  el('card').classList.remove('on');
-  el('specWrap').className = 'on';
-  
-  stage('LISTENING', '3.0s');
+  show('cap'); title('SCANNING'); leds(0, 2, 0);
+  el('count').textContent = '3.0'; el('capMsg').textContent = 'HOLD STILL';
 
-  capture(function (frac) {
-    el('sub').textContent = (3 - frac * 3).toFixed(1) + 's';
-  }).then(function (pcm) {
-    // Leave the spectrogram up through inference: it is what the model is
-    // looking at, and ~0.9s of blank screen otherwise reads as a freeze.
-    stage('IDENTIFYING', 'heard 3.0s');
-    worker.postMessage({ message: 'identify', pcm: pcm }, [pcm.buffer]);
-  }).catch(function (e) {
-    busy = false;
-    el('specWrap').className = '';
-    
-    stage('MIC ERROR', (e && e.message) || String(e));
-  });
+  capture(function (f) { el('count').textContent = (3 - f * 3).toFixed(1); })
+    .then(function (pcm) {
+      el('count').textContent = '--'; el('capMsg').textContent = 'ANALYSING';
+      worker.postMessage({ message:'identify', pcm:pcm }, [pcm.buffer]);
+    })
+    .catch(function (e) {
+      busy = false; leds(1, 0, 0);
+      showPlain('MIC ERROR', 'MIC ERROR', (e && e.message) || String(e));
+    });
+}
+
+function clearCard() {
+  el('chips').innerHTML = '';
+  el('confFill').style.width = '0';
+  el('confTxt').textContent = '';
+  el('band4').textContent = ''; el('band4').className = '';
+  el('rarity').textContent = ''; el('rarity').className = '';
+  el('alts').textContent = '';
+  el('photo').textContent = 'NO IMG';
+}
+function showPlain(t, head, sub) {
+  show('res'); title(t); clearCard();
+  el('common').textContent = head;
+  el('sci').textContent = sub || '';
 }
 
 function showResult(d) {
-  busy = false;
-  el('specWrap').className = '';
-  
+  busy = false; leds(0, 0, 1);
   var top = d.top || [];
-  if (!top.length || top[0].confidence < THRESHOLD) {
-    stage('NO MATCH', top.length
-      ? 'best ' + top[0].common + ' ' + top[0].confidence.toFixed(2)
-      : 'nothing heard');
+  show('res'); clearCard();
+
+  if (!top.length || top[0].confidence < SHOW_MIN) {
+    title('NO SIGNAL');
+    el('photo').textContent = '--';
+    el('common').textContent = 'NO SIGNAL';
+    el('sci').textContent = top.length
+      ? 'closest was ' + top[0].common : 'nothing heard';
     return;
   }
-  // A confident Siren or Engine is the model telling us it heard no bird.
-  // Report it as interference; never file it in the collection.
+  // A confident Siren or Engine is the model saying it heard no animal.
   if (top[0].noise) {
-    stage('INTERFERENCE', top[0].common + ' ' + top[0].confidence.toFixed(2));
+    title('INTERFERENCE'); el('photo').textContent = '!';
+    el('common').textContent = top[0].common;
+    el('sci').textContent = 'not an animal';
+    el('confFill').style.width = Math.round(top[0].confidence * 100) + '%';
+    el('confTxt').textContent = top[0].confidence.toFixed(2);
+    el('alts').textContent = 'move away from the source';
     return;
   }
-  var best = top[0];
-  var isNew = record(best);
 
-  stage('', '');
-  el('card').classList.add('on');
-  el('common').textContent = best.common;
-  el('sci').textContent = best.sci;
-  el('confFill').style.width = Math.round(best.confidence * 100) + '%';
-  el('confTxt').textContent = best.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
-  el('badge').className = isNew ? 'on' : '';
-  var tax = taxonOf(best.sci);
-  el('taxon').textContent = TAXON_ICON[tax];
-  el('taxon').className = tax === 'bird' ? '' : 'on t-' + tax;
+  var b = top[0];
+  var bd = bandOf(b.confidence);
+  var saved = b.confidence >= recordMin();
+  var isNew = saved ? record(b) : false;
+  var tax = taxonOf(b.sci);
 
-  var r = rarityOf(best.geo);
+  title(isNew ? 'NEW ENTRY' : 'IDENTIFIED');
+  if (isNew) { addChip('NEW', 'new'); }
+  if (tax !== 'bird') { addChip(TAXON_LONG[tax], tax); }
+  if (!saved) { addChip('NOT SAVED', 'warn'); }
+
+  el('band4').textContent = bd ? bd.label : '';
+  el('band4').className = bd ? bd.cls : '';
+  el('confFill').style.width = Math.round(b.confidence * 100) + '%';
+  el('confTxt').textContent = b.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
+  el('common').textContent = b.common;
+  el('sci').textContent = b.sci;
+
+  var r = rarityOf(b.geo);
   if (!r) {
-    el('rarity').textContent = zip ? '' : 'set ZIP for rarity';
-    el('rarity').className = '';
+    el('rarity').textContent = zip ? '' : 'set ZIP in CFG for rarity';
   } else if (r.anomaly) {
     el('rarity').textContent = 'ANOMALY - not expected at ' + zip;
     el('rarity').className = 'anomaly';
   } else {
-    el('rarity').innerHTML = '';
-    var lab = document.createElement('span');
-    lab.textContent = r.label + '  ';
-    var pp = document.createElement('span');
-    pp.className = 'pip'; pp.textContent = pips(r.pips);
-    el('rarity').appendChild(lab); el('rarity').appendChild(pp);
-    el('rarity').className = '';
+    var a = document.createElement('span');
+    a.textContent = r.label + '  ';
+    var p = document.createElement('span');
+    p.className = 'pip'; p.textContent = pips(r.pips);
+    el('rarity').appendChild(a); el('rarity').appendChild(p);
   }
-  el('alts').textContent = top.slice(1)
-    .map(function (b) { return b.common + ' ' + b.confidence.toFixed(2); })
-    .join('\n');
-  renderDex();
+  el('alts').textContent = top.slice(1).map(function (x) {
+    return x.common + '  ' + x.confidence.toFixed(2); }).join('\n');
 }
 
-/* ---------- views ---------- */
+function addChip(text, cls) {
+  var s = document.createElement('span');
+  s.className = 'chip ' + cls; s.textContent = text;
+  el('chips').appendChild(s);
+}
+
+/* ---------- views + focus ---------- */
+var RAILS = {
+  home: [['SCAN', function(){ identify(); }],
+         ['DEX',  function(){ show('dex'); }],
+         ['CFG',  function(){ show('cfg'); }]],
+  res:  [['SCAN', function(){ identify(); }],
+         ['DEX',  function(){ show('dex'); }],
+         ['HOME', function(){ show('home'); }]]
+};
+
+function dexKeys() {
+  var k = Object.keys(dex);
+  k.sort(function (a, b) { return dex[b].last - dex[a].last; });
+  return k;
+}
+
+function focusables() {
+  if (RAILS[view]) {
+    return RAILS[view].map(function (r) { return { label:r[0], act:r[1] }; });
+  }
+  if (view === 'dex') {
+    var out = [{ label:'< BACK', act:function(){ show('home'); } }];
+    dexKeys().forEach(function () { out.push({ label:'', act:function(){} }); });
+    return out;
+  }
+  if (view === 'cfg') {
+    return [{ label:'< BACK',    act:function(){ show('home'); } },
+            { label:'ZIP CODE',  act:function(){ zipOpen(); } },
+            { label:'SAVE AT',   act:function(){ cycleSave(); } },
+            { label:'ERASE DEX', act:function(){ eraseArm(); } }];
+  }
+  return [];
+}
+
 function show(name) {
-  view = name;
-  el('listen').className = 'view' + (name === 'listen' ? ' on' : '');
-  el('dex').className = 'view' + (name === 'dex' ? ' on' : '');
-  el('zipv').className = 'view' + (name === 'zip' ? ' on' : '');
-  if (name === 'dex') { renderDex(); }
-  else if (name === 'zip') { el('title').textContent = 'CONFIG'; }
-  else { el('title').textContent = 'POKEDEX'; }
+  view = name; focus = 0;
+  ['boot','home','cap','res','dex','cfg','zip'].forEach(function (v) {
+    el('v-' + v).className = 'view' + (v === name ? ' on' : '');
+  });
+  if (name === 'home') { title('POKEDEX'); renderHome(); }
+  else if (name === 'dex') { renderDex(); }
+  else if (name === 'cfg') { title('CONFIG'); renderCfg(); }
+  else if (name === 'zip') { title('ZIP CODE'); }
+  renderRail();
+}
+
+function renderRail() {
+  var r = el('rail'), f = RAILS[view];
+  r.innerHTML = '';
+  if (!f) { r.style.display = 'none'; return; }
+  r.style.display = 'flex';
+  f.forEach(function (cell, i) {
+    var d = document.createElement('div');
+    d.className = 'cell' + (i === focus ? ' sel' : '');
+    d.textContent = cell[0];
+    r.appendChild(d);
+  });
+}
+
+function renderHome() {
+  var s = el('stats'); s.innerHTML = '';
+  function row(k, v, cls) {
+    var d = document.createElement('div'); d.className = 'srow';
+    var b = document.createElement('b'); b.textContent = k;
+    var sp = document.createElement('span'); sp.textContent = v;
+    if (cls) { sp.style.color = cls; }
+    d.appendChild(b); d.appendChild(sp); s.appendChild(d);
+  }
+  // Two meters on purpose: 6511 reads ~0% forever and is demoralising alone;
+  // the nearby count is the achievable one, and the actual game.
+  row('DEX', Object.keys(dex).length + ' / 6511');
+  row('NEARBY', nearby ? countSeenNearby() + ' / ' + nearby.length : 'set ZIP',
+      nearby ? 'var(--green)' : 'var(--ink3)');
+  row('ZIP', zip || '-----');
+  row('WEEK', String(week48()) + ' / 48');
+}
+function countSeenNearby() {
+  var n = 0;
+  if (nearby) { nearby.forEach(function (x) { if (dex[x.sci]) { n++; } }); }
+  return n;
+}
+
+function renderDex() {
+  var l = el('dexList'), keys = dexKeys();
+  l.innerHTML = '';
+  title('DEX ' + keys.length + (nearby ? ' / ' + nearby.length : ''));
+
+  var back = document.createElement('div');
+  back.className = 'row' + (focus === 0 ? ' sel' : '');
+  back.textContent = '< BACK';
+  l.appendChild(back);
+
+  keys.forEach(function (k, i) {
+    var e = dex[k];
+    var d = document.createElement('div');
+    d.className = 'row' + (focus === i + 1 ? ' sel' : '');
+    var nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = e.common;
+    d.appendChild(nm);
+    var tx = e.taxon || taxonOf(e.sci);
+    if (tx !== 'bird') {
+      var t = document.createElement('span');
+      t.className = 'rt tx ' + tx; t.textContent = TAXON_SHORT[tx];
+      d.appendChild(t);
+    }
+    var ct = document.createElement('span');
+    ct.className = 'ct'; ct.textContent = 'x' + e.count;
+    d.appendChild(ct);
+    var cf = document.createElement('span');
+    cf.className = 'rt'; cf.textContent = e.best.toFixed(2);
+    d.appendChild(cf);
+    l.appendChild(d);
+  });
+
+  if (!keys.length) {
+    var h = document.createElement('div');
+    h.className = 'hint';
+    h.textContent = 'no catches yet\npress PTT near an animal';
+    l.appendChild(h);
+  }
+  scrollFocusIntoView(l);
+}
+
+function cycleSave() {
+  saveLevel = (saveLevel + 1) % SAVE_LEVELS.length;
+  if (store) { store.set(SAVE_KEY, String(saveLevel)); }
+  renderCfg();
+}
+
+var eraseCount = 0, eraseTimer = 0;
+function eraseArm() {
+  // No hold gesture exists on this firmware, so a destructive confirm is a
+  // counted press. Any wheel movement cancels, and it self-clears after 2 s.
+  eraseCount++;
+  clearTimeout(eraseTimer);
+  eraseTimer = setTimeout(function () { eraseCount = 0; if (view === 'cfg') { renderCfg(); } }, 2000);
+  if (eraseCount >= 3) { dex = {}; saveDex(); eraseCount = 0; }
+  renderCfg();
+}
+
+function renderCfg() {
+  var l = el('cfgList'), items = focusables();
+  var vals = ['', zip || 'not set',
+              SAVE_LEVELS[saveLevel][1] + '  ' + recordMin().toFixed(2),
+              eraseCount ? (3 - eraseCount) + ' more presses'
+                         : Object.keys(dex).length + ' entries'];
+  l.innerHTML = '';
+  items.forEach(function (it, i) {
+    var d = document.createElement('div');
+    d.className = 'row' + (i === focus ? ' sel' : '');
+    var nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = it.label;
+    var v = document.createElement('span');
+    v.className = 'rt'; v.textContent = vals[i];
+    if (i === 3 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    d.appendChild(nm); d.appendChild(v);
+    l.appendChild(d);
+  });
+  var info = document.createElement('div');
+  info.className = 'hint';
+  info.textContent = 'build ' + window.__BUILD +
+    '\nBirdNET 2.4 - 6511 species\n' + (store ? store.kind : '') +
+    '\nrarity = how often birders\nreport a species here';
+  l.appendChild(info);
+  scrollFocusIntoView(l);
+}
+
+function scrollFocusIntoView(l) {
+  var sel = l.querySelector('.row.sel');
+  if (!sel) { return; }
+  var top = sel.offsetTop, bot = top + sel.offsetHeight;
+  if (top < l.scrollTop) { l.scrollTop = top; }
+  else if (bot > l.scrollTop + l.clientHeight) { l.scrollTop = bot - l.clientHeight; }
+}
+
+function rerender() {
+  if (view === 'dex') { renderDex(); }
+  else if (view === 'cfg') { renderCfg(); }
+  else { renderRail(); }
+}
+
+/* ---------- zip reel ----------
+   No keyboard exists. Slots 0-2 offer only digits that can still complete to a
+   real US prefix; 3-4 are free, since only the first three drive the range
+   lookup. A '<' cell in the same reel undoes, so there is no second input and
+   no mode. The reel seeds from the saved ZIP, making re-entry PTT x5. */
+var zipSlots = ['_','_','_','_','_'], zipSlot = 0, zipReel = [], zipIdx = 0;
+
+function zipAllowed(slot) {
+  if (slot > 2) { return ['0','1','2','3','4','5','6','7','8','9']; }
+  var pre = zipSlots.slice(0, slot).join(''), set = {};
+  for (var k in ZIP3) { if (k.indexOf(pre) === 0) { set[k.charAt(slot)] = 1; } }
+  return Object.keys(set).sort();
+}
+function zipOpen() {
+  var cur = (zip || '').split('');
+  zipSlots = ['_','_','_','_','_'];
+  for (var i = 0; i < 5; i++) { if (cur[i]) { zipSlots[i] = cur[i]; } }
+  zipSlot = 0; show('zip'); zipLoad();
+}
+function zipLoad() {
+  zipReel = zipAllowed(zipSlot).concat(['<']);
+  var at = zipReel.indexOf(zipSlots[zipSlot]);
+  zipIdx = at >= 0 ? at : 0;
+  zipSlots[zipSlot] = zipReel[zipIdx];
+  zipRender();
+}
+function zipRender() {
+  var d = el('zipDigits'); d.innerHTML = '';
+  for (var i = 0; i < 5; i++) {
+    var s = document.createElement('span');
+    s.textContent = zipSlots[i];
+    s.className = i === zipSlot ? 'cur' : (i > zipSlot ? 'pend' : '');
+    d.appendChild(s);
+  }
+  var ll = ZIP3[zipSlots.slice(0, 3).join('')];
+  el('zipWhere').textContent = ll ? ll[0].toFixed(2) + ', ' + ll[1].toFixed(2) : '';
+  el('zipHint').textContent = zipSlot <= 2
+    ? (zipReel.length - 1) + ' of 10 digits possible'
+    : 'digit ' + (zipSlot + 1) + ' of 5';
+}
+function zipTurn(dir) {
+  zipIdx = (zipIdx + dir + zipReel.length) % zipReel.length;
+  zipSlots[zipSlot] = zipReel[zipIdx];
+  zipRender();
+}
+function zipCommit() {
+  if (zipSlots[zipSlot] === '<') {
+    zipSlots[zipSlot] = '_';
+    if (zipSlot === 0) { show('cfg'); return; }
+    zipSlot--; zipLoad(); return;
+  }
+  if (zipSlot < 4) { zipSlot++; zipLoad(); return; }
+  zip = zipSlots.join('');
+  if (store) { store.set(ZIP_KEY, zip); }
+  nearby = null; requestGeo();
+  show('cfg');
+}
+
+/* ---------- range ---------- */
+function requestGeo() {
+  if (!zip || !ready || !worker) { return; }
+  var ll = ZIP3[zip.slice(0, 3)];
+  if (!ll) { return; }
+  worker.postMessage({ message:'geo', lat:ll[0], lon:ll[1], week:week48() });
 }
 
 /* ---------- worker ---------- */
@@ -628,222 +812,100 @@ function boot() {
   worker.addEventListener('message', function (ev) {
     var d = ev.data;
     if (d.message === 'error') {
-      status('error', 'bad');
-      stage('FAILED', d.where + ': ' + String(d.error).slice(0, 60));
-      busy = false;
+      leds(1, 0, 0); title('FAILED'); busy = false;
+      el('bootTxt').textContent = 'FAILED';
+      el('bootSub').textContent = d.where + ': ' + String(d.error).slice(0, 50);
       return;
     }
     if (d.message === 'load_progress') {
-      stage('STARTING', 'model ' + Math.round(d.progress * 100) + '%');
+      el('bootBar').style.width = Math.round(d.progress * 100) + '%';
+      el('bootSub').textContent = 'model ' + Math.round(d.progress * 100) + '%';
       return;
     }
-    if (d.message === 'warmup') { stage('STARTING', 'warming up'); return; }
-    if (d.message === 'ready') {
-      ready = true;
-      status('ready', 'good');
-      stage('READY', 'press PTT');
-      requestGeo();
-      return;
-    }
-    if (d.message === 'geo_loading') { status('range...', 'warn'); return; }
+    if (d.message === 'warmup') { el('bootSub').textContent = 'warming up'; leds(0, 1, 0); return; }
+    if (d.message === 'ready') { ready = true; leds(0, 0, 1); show('home'); requestGeo(); return; }
+    if (d.message === 'geo_loading') { title('RANGE...'); return; }
     if (d.message === 'geo') {
-      nearby = d.nearby; geoTiers = d.tiers;
-      status('ready', 'good');
-      renderDex();
+      nearby = d.nearby;
+      if (view === 'home') { title('POKEDEX'); renderHome(); }
       return;
     }
     if (d.message === 'result') { showResult(d); return; }
   });
   worker.addEventListener('error', function (e) {
-    status('error', 'bad');
-    stage('WORKER FAILED', e.message || 'see console');
+    leds(1, 0, 0);
+    el('bootTxt').textContent = 'WORKER FAILED';
+    el('bootSub').textContent = e.message || 'see console';
   });
 }
 
-/* ---------- zip picker ----------
-   Slots 0-2 are constrained by the shipped prefix table; 3-4 are free, since
-   only the first three digits are used for the range lookup. The reel also
-   carries a '<' cell so a mis-entered digit can be undone with the same two
-   inputs and no extra mode. */
-var ZIP_KEY = 'pokedex_zip';
-var zipSlots = ['_', '_', '_', '_', '_'];
-var zipSlot = 0;
-var zipReel = [];
-var zipReelIdx = 0;
-
-function zipAllowed(slot) {
-  if (slot > 2) { return ['0','1','2','3','4','5','6','7','8','9']; }
-  var pre = zipSlots.slice(0, slot).join('');
-  var set = {};
-  for (var k in ZIP3) {
-    if (k.indexOf(pre) === 0) { set[k.charAt(slot)] = 1; }
-  }
-  return Object.keys(set).sort();
-}
-
-function zipOpen() {
-  var cur = (zip || '').split('');
-  zipSlots = ['_', '_', '_', '_', '_'];
-  // Seed from the saved ZIP so re-entering a known one is just PTT x5.
-  for (var i = 0; i < 5; i++) { if (cur[i]) { zipSlots[i] = cur[i]; } }
-  zipSlot = 0;
-  zipLoadReel();
-  show('zip');
-}
-
-function zipLoadReel() {
-  zipReel = zipAllowed(zipSlot).concat(['<']);
-  var want = zipSlots[zipSlot];
-  var at = zipReel.indexOf(want);
-  zipReelIdx = at >= 0 ? at : 0;
-  zipSlots[zipSlot] = zipReel[zipReelIdx];
-  zipRender();
-}
-
-function zipRender() {
-  var d = el('zipDigits');
-  d.innerHTML = '';
-  for (var i = 0; i < 5; i++) {
-    var sp = document.createElement('span');
-    sp.textContent = zipSlots[i];
-    sp.className = i === zipSlot ? 'cur' : (i > zipSlot ? 'pend' : '');
-    d.appendChild(sp);
-  }
-  var pre = zipSlots.slice(0, 3).join('');
-  var ll = ZIP3[pre];
-  el('zipWhere').textContent = ll ? ll[0].toFixed(2) + ', ' + ll[1].toFixed(2) : '';
-  var n = zipReel.length - 1;
-  el('zipHint').textContent = zipSlot <= 2
-    ? n + ' of 10 digits possible'
-    : 'digit ' + (zipSlot + 1) + ' of 5';
-}
-
-function zipTurn(dir) {
-  zipReelIdx = (zipReelIdx + dir + zipReel.length) % zipReel.length;
-  zipSlots[zipSlot] = zipReel[zipReelIdx];
-  zipRender();
-}
-
-function zipCommit() {
-  if (zipSlots[zipSlot] === '<') {
-    zipSlots[zipSlot] = '_';
-    if (zipSlot === 0) { show('listen'); return; }
-    zipSlot--;
-    zipLoadReel();
-    return;
-  }
-  if (zipSlot < 4) { zipSlot++; zipLoadReel(); return; }
-  zip = zipSlots.join('');
-  store.set(dex);
-  saveZip();
-  nearby = null; geoTiers = null;
-  requestGeo();
-  show('listen');
-  stage('ZIP SET', zip);
-}
-
-function saveZip() {
-  try {
-    if (store && store.kind === 'creationStorage') {
-      window.creationStorage.plain.setItem(ZIP_KEY, b64enc(zip));
-    } else {
-      localStorage.setItem(ZIP_KEY, zip);
-    }
-  } catch (e) {}
-}
-
-function loadZip(hasHost) {
-  try {
-    if (hasHost) {
-      return Promise.resolve(window.creationStorage.plain.getItem(ZIP_KEY))
-        .then(function (v) { return v ? b64dec(v) : null; });
-    }
-    return Promise.resolve(localStorage.getItem(ZIP_KEY));
-  } catch (e) { return Promise.resolve(null); }
-}
-
 /* ---------- input ----------
-   Hardware events are dispatched by the host straight onto window — no SDK
-   wrapper needed, and no touch handlers, which is where the preventDefault
-   crash lives. */
-var hwSeen = {};
-function sawHW(name) {
-  hwSeen[name] = (hwSeen[name] || 0) + 1;
-  el('hw').textContent = name;
-}
-// Register every documented event so the readout reveals what actually fires.
-['sideClick', 'longPressStart', 'longPressEnd', 'scrollUp', 'scrollDown']
-  .forEach(function (n) { window.addEventListener(n, function () { sawHW(n); }); });
-
-window.addEventListener('sideClick', function () {
-  if (view === 'zip') { zipCommit(); }
-  else if (view === 'dex') { show('listen'); }
-  else { identify(); }
-});
-// Kept in case this firmware does dispatch them — harmless if it never does,
-// and identify() is idempotent while busy.
-window.addEventListener('longPressEnd', function () {
-  if (view === 'listen') { identify(); }
-});
-window.addEventListener('scrollDown', function () {
-  if (view === 'zip') { zipTurn(1); return; }
-  if (view === 'listen') { show('dex'); return; }
-  var l = el('dexList');
-  // Past the end of the collection, the wheel keeps going into settings.
-  if (l.scrollTop + l.clientHeight >= l.scrollHeight - 2) { zipOpen(); return; }
-  l.scrollTop += 36;
-});
-window.addEventListener('scrollUp', function () {
-  if (view === 'zip') { zipTurn(-1); return; }
-  if (view === 'dex') {
-    if (el('dexList').scrollTop <= 0) { show('listen'); }
-    else { el('dexList').scrollTop -= 36; }
+   Host-dispatched DOM events only. No touch handlers anywhere: preventDefault
+   on a touch event crashes this WebView about 3 s later. */
+function commit() {
+  var now = Date.now();
+  // Post-commit lockout plus a visible press flash, so the user is
+  // acknowledged and does not re-tap into the eight-tap shutdown.
+  if (now - lastCommit < 250) { return; }
+  lastCommit = now;
+  if (view === 'cap' || view === 'boot') { return; }   // discarded, not queued
+  if (view === 'zip') { zipCommit(); return; }
+  var f = focusables();
+  if (!f.length) { return; }
+  var cell = el('rail').children[focus];
+  if (cell) {
+    cell.className = 'cell press';
+    setTimeout(renderRail, 120);
   }
-});
-// Pointer fallback so the app is testable in a normal browser.
-el('stage').addEventListener('pointerdown', function () {
-  if (view === 'listen') { identify(); }
-});
-el('foot').addEventListener('pointerdown', function (e) {
-  e.stopPropagation(); show('dex');
-});
-el('foot2').addEventListener('pointerdown', function () { show('listen'); });
-el('zipFoot').addEventListener('pointerdown', function () { zipCommit(); });
+  f[Math.min(focus, f.length - 1)].act();
+}
+function move(dir) {
+  if (view === 'cap' || view === 'boot') { return; }
+  if (view === 'zip') { zipTurn(dir); return; }
+  if (eraseCount) { eraseCount = 0; }                  // any wheel cancels erase
+  var f = focusables();
+  if (!f.length) { return; }
+  focus = (focus + dir + f.length) % f.length;
+  rerender();
+}
+
+window.addEventListener('sideClick',  function () { commit(); });
+window.addEventListener('scrollUp',   function () { move(-1); });
+window.addEventListener('scrollDown', function () { move(1); });
+// Desktop testing only — pointer, never touch.
+el('rail').addEventListener('pointerdown', function () { commit(); });
+el('v-zip').addEventListener('pointerdown', function () { commit(); });
 
 /* ---------- startup ---------- */
 if (navigator.serviceWorker) {
   navigator.serviceWorker.register('sw.js').catch(function () {});
 }
-
-// Build stamp: a stale cached page is indistinguishable from a broken one.
-fetch('./index.html?cb=' + Math.random(), { cache: 'no-store' })
+// A stale cached page is indistinguishable from a broken one unless it says so.
+fetch('./index.html?cb=' + Math.random(), { cache:'no-store' })
   .then(function (r) { return r.text(); })
   .then(function (h) {
     var m = h.match(/name="build" content="([^"]+)"/);
-    if (m && m[1] !== window.__BUILD) {
-      el('title').textContent = 'STALE ' + window.__BUILD;
-      el('title').className = 'bad';
-    }
-  })
-  .catch(function () {});
-
-fetch('data/zip3.json').then(function (r) { return r.json(); })
-  .then(function (z) { ZIP3 = z; requestGeo(); })
-  .catch(function () { /* rarity simply stays unavailable */ });
+    if (m && m[1] !== window.__BUILD) { title('STALE ' + window.__BUILD); }
+  }).catch(function () {});
 
 fetch('data/taxa.json').then(function (r) { return r.json(); })
-  .then(function (t) { TAXA = t; renderDex(); })
-  .catch(function () { /* all species simply read as birds */ });
+  .then(function (t) { TAXA = t; }).catch(function () {});
+fetch('data/zip3.json').then(function (r) { return r.json(); })
+  .then(function (z) { ZIP3 = z; requestGeo(); }).catch(function () {});
 
-whenSDKReady(function (hasHost) {
-  store = makeStore(hasHost);
-  loadZip(hasHost).then(function (z) {
-    if (z && /^[0-9]{5}$/.test(z)) { zip = z; requestGeo(); }
+leds(1, 0, 0);
+whenSDKReady(function (host) {
+  store = makeStore(host);
+  store.get(DEX_KEY).then(function (v) {
+    try { dex = v ? JSON.parse(v) : {}; } catch (e) { dex = {}; }
+    if (view === 'home') { renderHome(); }
   });
-  store.get().then(function (d) {
-    dex = d || {};
-    renderDex();
-    if (view === 'listen') { el('title').textContent = 'POKEDEX'; }
+  store.get(SAVE_KEY).then(function (v) {
+    var n = parseInt(v, 10);
+    if (n >= 0 && n < SAVE_LEVELS.length) { saveLevel = n; }
+  });
+  store.get(ZIP_KEY).then(function (z) {
+    if (z && /^[0-9]{5}$/.test(z)) { zip = z; requestGeo(); }
   });
   boot();
 });
