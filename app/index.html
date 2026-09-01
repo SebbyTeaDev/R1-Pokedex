@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b1">
-<script>window.__BUILD = "b1";</script>
+<meta name="build" content="b2">
+<script>window.__BUILD = "b2";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -61,9 +61,18 @@
   /* ---- mode rail ---- */
   #rail { flex:0 0 auto; display:flex; height:20px;
           border-top:1px solid var(--line); background:var(--panel); }
+  /* Tabs interlock: every internal edge slants the same way, and the two
+     OUTER edges stay vertical so the rail sits flush to the screen. Slanting
+     only the right edge of each cell left the first cell's left edge square
+     and the last cell's right edge cut, which read as a mistake.
+     The -6px margin makes each pair's diagonals meet exactly. */
   .cell { flex:1 1 0; display:flex; align-items:center; justify-content:center;
           font-size:9px; letter-spacing:.08em; color:var(--ink3);
-          clip-path:polygon(0 0,100% 0,calc(100% - 6px) 100%,0 100%); }
+          clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%);
+          margin-left:-6px; padding-left:6px; }
+  .cell:first-child { clip-path:polygon(0 0,100% 0,calc(100% - 6px) 100%,0 100%);
+                      margin-left:0; padding-left:0; }
+  .cell:last-child  { clip-path:polygon(6px 0,100% 0,100% 100%,0 100%); }
   .cell.sel { background:linear-gradient(180deg,#F5B33F,var(--amber) 55%,var(--amber-dk));
               color:#0D0D0F; font-weight:bold; }
   .cell.press { background:linear-gradient(180deg,#fff,var(--amber)); color:#0D0D0F; }
@@ -178,7 +187,7 @@
   <div id="v-cap" class="view">
     <div class="mid">
       <div id="specWrap">
-        <canvas id="spec" width="180" height="104"></canvas>
+        <canvas id="spec" width="480" height="208"></canvas>
         <span class="fl t">15k</span><span class="fl b">0Hz</span><span class="fl r">3s</span>
       </div>
       <div id="count">3.0</div>
@@ -369,29 +378,38 @@ function withTimeout(p, ms, what) {
   });
 }
 
-var sctx = null, specX = 0;
+/* The canvas is 480x208 to match the panel's real pixels (240x104 CSS at
+   devicePixelRatio 2). At 180x104 the browser was upscaling, so detail the
+   FFT had already resolved was thrown away before it reached the glass.
+   480 columns over 3 s is 160 per second; 208 rows over 0-15 kHz is ~72 Hz
+   per row, which the 2048-point FFT below can actually fill. */
+var sctx = null, specX = 0, colImg = null;
 function specReset() {
-  var c = el('spec'); sctx = c.getContext('2d');
-  sctx.fillStyle = '#08080A'; sctx.fillRect(0, 0, c.width, c.height); specX = 0;
+  var c = el('spec');
+  sctx = c.getContext('2d');
+  sctx.fillStyle = '#08080A'; sctx.fillRect(0, 0, c.width, c.height);
+  colImg = sctx.createImageData(1, c.height);
+  specX = 0;
 }
-function heat(v) {
-  if (v < 0.5) { var a = v / 0.5;
-    return 'rgb(' + ((13+a*232)|0) + ',' + ((13+a*145)|0) + ',' + ((15-a*4)|0) + ')'; }
-  var b = (v - 0.5) / 0.5;
-  return 'rgb(245,' + ((158+b*97)|0) + ',' + ((11+b*244)|0) + ')';
-}
-/* Columns advance with CAPTURE PROGRESS, not frame rate. Driving them from
-   requestAnimationFrame filled the panel at whatever rate the device happened
-   to render — ~10 of 180 columns in 1.6 s on a throttled tab. */
+/* Writes straight into an ImageData column. The old version issued one
+   fillRect per pixel with a formatted rgb() string — 208 style parses and
+   208 draw calls per column, ~100k across a capture, which the GE8320 will
+   not do at this resolution. */
 function specDrawTo(prog, data, maxBin) {
   var c = el('spec'), H = c.height, W = c.width;
   var target = Math.min(W - 1, (prog * W) | 0);
+  var px = colImg.data;
   while (specX <= target) {
     for (var y = 0; y < H; y++) {
       var v = data[((1 - y / H) * maxBin) | 0] / 255;
-      sctx.fillStyle = heat(v * v);        // square it: suppress the noise floor
-      sctx.fillRect(specX, y, 1, 1);
+      v = v * v;                                  // square: suppress the floor
+      var r, g, b;
+      if (v < 0.5) { var a = v * 2; r = 13 + a*232 | 0; g = 13 + a*145 | 0; b = 15 - a*4 | 0; }
+      else { var t = (v - 0.5) * 2; r = 245; g = 158 + t*97 | 0; b = 11 + t*244 | 0; }
+      var o = y * 4;
+      px[o] = r; px[o+1] = g; px[o+2] = b; px[o+3] = 255;
     }
+    sctx.putImageData(colImg, specX, 0);
     specX++;
   }
 }
@@ -419,7 +437,9 @@ function capture(onProg) {
       throw new Error('mic at ' + ctx.sampleRate + 'Hz, need ' + RATE);
     }
     src = ctx.createMediaStreamSource(stream);
-    an = ctx.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.35;
+    // 2048-point FFT: ~23 Hz per bin, so the 208-row canvas is fed real
+    // detail rather than the same 512 bins stretched over more pixels.
+    an = ctx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0.25;
     node = ctx.createScriptProcessor(4096, 1, 1);
     var buf = new Float32Array(SAMPLES), n = 0;
     // BirdNET's mel front-end tops out near 15 kHz; showing 0..24 would waste
@@ -614,6 +634,12 @@ function renderRail() {
     var d = document.createElement('div');
     d.className = 'cell' + (i === focus ? ' sel' : '');
     d.textContent = cell[0];
+    // Tap the cell you meant, not whatever happened to be focused. pointerdown
+    // with no preventDefault — touch handlers crash this WebView.
+    d.addEventListener('pointerdown', function (ev) {
+      ev.stopPropagation();
+      activate(i);
+    });
     r.appendChild(d);
   });
 }
@@ -649,6 +675,7 @@ function renderDex() {
   var back = document.createElement('div');
   back.className = 'row' + (focus === 0 ? ' sel' : '');
   back.textContent = '< BACK';
+  bindRow(back, 0);
   l.appendChild(back);
 
   keys.forEach(function (k, i) {
@@ -670,6 +697,7 @@ function renderDex() {
     var cf = document.createElement('span');
     cf.className = 'rt'; cf.textContent = e.best.toFixed(2);
     d.appendChild(cf);
+    bindRow(d, i + 1);
     l.appendChild(d);
   });
 
@@ -715,6 +743,7 @@ function renderCfg() {
     v.className = 'rt'; v.textContent = vals[i];
     if (i === 3 && eraseCount) { v.style.color = 'var(--red-txt)'; }
     d.appendChild(nm); d.appendChild(v);
+    bindRow(d, i);
     l.appendChild(d);
   });
   var info = document.createElement('div');
@@ -724,6 +753,13 @@ function renderCfg() {
     '\nrarity = how often birders\nreport a species here';
   l.appendChild(info);
   scrollFocusIntoView(l);
+}
+
+function bindRow(node, idx) {
+  node.addEventListener('pointerdown', function (ev) {
+    ev.stopPropagation();
+    activate(idx);
+  });
 }
 
 function scrollFocusIntoView(l) {
@@ -842,7 +878,10 @@ function boot() {
 /* ---------- input ----------
    Host-dispatched DOM events only. No touch handlers anywhere: preventDefault
    on a touch event crashes this WebView about 3 s later. */
-function commit() {
+/* Single activation path shared by the wheel and the touchscreen. `idx` moves
+   focus first, so tapping a rail cell or a list row does what you pointed at
+   rather than what the cursor happened to be on. */
+function activate(idx) {
   var now = Date.now();
   // Post-commit lockout plus a visible press flash, so the user is
   // acknowledged and does not re-tap into the eight-tap shutdown.
@@ -852,13 +891,18 @@ function commit() {
   if (view === 'zip') { zipCommit(); return; }
   var f = focusables();
   if (!f.length) { return; }
-  var cell = el('rail').children[focus];
+  if (idx !== undefined && idx >= 0 && idx < f.length) { focus = idx; }
+  var i = Math.min(focus, f.length - 1);
+  var cell = el('rail').children[i];
   if (cell) {
     cell.className = 'cell press';
     setTimeout(renderRail, 120);
+  } else {
+    rerender();
   }
-  f[Math.min(focus, f.length - 1)].act();
+  f[i].act();
 }
+function commit() { activate(); }
 function move(dir) {
   if (view === 'cap' || view === 'boot') { return; }
   if (view === 'zip') { zipTurn(dir); return; }
@@ -872,9 +916,10 @@ function move(dir) {
 window.addEventListener('sideClick',  function () { commit(); });
 window.addEventListener('scrollUp',   function () { move(-1); });
 window.addEventListener('scrollDown', function () { move(1); });
-// Desktop testing only — pointer, never touch.
-el('rail').addEventListener('pointerdown', function () { commit(); });
-el('v-zip').addEventListener('pointerdown', function () { commit(); });
+// Touchscreen. pointerdown only, and never preventDefault — touch handlers
+// crash this WebView about 3 s later. Rail cells and list rows bind their own
+// handlers in renderRail/bindRow so a tap hits what you actually pointed at.
+el('v-zip').addEventListener('pointerdown', function () { zipCommit(); });
 
 /* ---------- startup ---------- */
 if (navigator.serviceWorker) {
