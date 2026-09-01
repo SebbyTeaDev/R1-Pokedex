@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>R1 Pokedex</title>
+<!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
+     within 10 minutes serves stale HTML and looks like a broken build. -->
+<meta name="build" content="a1">
+<script>window.__BUILD = "a1";</script>
+<style>
+  /* Measured viewport is 240x292 (docs say 282 — trust the device). Nothing
+     below hardcodes it: the 152 reading was never reproduced, so a surprise
+     viewport should degrade rather than break. */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #0d0d0f; color: #e8e8ea;
+    font: 11px/1.3 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    user-select: none;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  #bar {
+    flex: 0 0 auto; display: flex; gap: 5px; align-items: baseline;
+    padding: 3px 5px; border-bottom: 1px solid #26262c;
+    font-size: 9px; color: #7d7d86;
+  }
+  #bar .sp { margin-left: auto; }
+  .warn { color: #fbbf24; }
+  .bad  { color: #f87171; }
+  .good { color: #4ade80; }
+
+  .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .view.on { display: flex; }
+
+  /* ---- listen ---- */
+  #stage {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 6px; text-align: center;
+  }
+  #state { font-size: 12px; color: #F59E0B; letter-spacing: .06em; }
+  #sub { font-size: 9px; color: #7d7d86; margin-top: 3px; }
+
+  /* Hidden until recording — an empty bar above a result card reads as a
+     broken progress indicator. */
+  #meter {
+    display: none; width: 80%; height: 4px; margin-top: 8px;
+    background: #26262c; border-radius: 2px; overflow: hidden;
+  }
+  #meterFill { height: 100%; width: 0; background: #4ade80; transition: width .05s; }
+
+  #card { width: 100%; display: none; }
+  #card.on { display: block; }
+  #common { font-size: 15px; line-height: 1.15; color: #fff; word-wrap: break-word; }
+  #sci { font-size: 9px; color: #8a7a66; font-style: italic; margin-top: 2px; }
+  #conf {
+    margin-top: 6px; height: 6px; background: #26262c;
+    border-radius: 3px; overflow: hidden;
+  }
+  #confFill { height: 100%; width: 0; background: #F59E0B; }
+  #confTxt { font-size: 9px; color: #7d7d86; margin-top: 2px; }
+  #badge {
+    display: none; margin-top: 5px; font-size: 10px; font-weight: bold;
+    color: #0d0d0f; background: #4ade80; padding: 2px 6px;
+    border-radius: 3px; letter-spacing: .08em;
+  }
+  #badge.on { display: inline-block; }
+  /* pre-line: runners-up are newline-joined and must stay one per line. */
+  #alts { margin-top: 6px; font-size: 9px; color: #5f5f68; white-space: pre-line; }
+
+  /* ---- dex ---- */
+  #dexList { flex: 1; min-height: 0; overflow-y: auto; padding: 3px 5px; }
+  .entry { display: flex; gap: 5px; align-items: baseline; padding: 3px 0;
+           border-bottom: 1px solid #1b1b20; }
+  .entry .nm { flex: 1 1 auto; color: #e8e8ea; word-break: break-word; }
+  .entry .ct { flex: 0 0 auto; color: #F59E0B; font-size: 10px; }
+  .entry .cf { flex: 0 0 auto; color: #5f5f68; font-size: 9px; width: 26px;
+               text-align: right; }
+  #empty { color: #5f5f68; text-align: center; padding: 20px 8px; font-size: 10px; }
+
+  #foot {
+    flex: 0 0 auto; padding: 3px 5px; border-top: 1px solid #26262c;
+    font-size: 9px; color: #5f5f68; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <span id="title">POKEDEX</span>
+    <span id="status" class="sp warn">booting</span>
+  </div>
+
+  <div id="listen" class="view on">
+    <div id="stage">
+      <div id="state">STARTING</div>
+      <div id="sub">loading model</div>
+      <div id="meter"><div id="meterFill"></div></div>
+      <div id="card">
+        <div id="common"></div>
+        <div id="sci"></div>
+        <div id="conf"><div id="confFill"></div></div>
+        <div id="confTxt"></div>
+        <div id="badge">NEW</div>
+        <div id="alts"></div>
+      </div>
+    </div>
+    <div id="foot">PTT listen &middot; scroll for dex</div>
+  </div>
+
+  <div id="dex" class="view">
+    <div id="dexList"></div>
+    <div id="foot2" class="" style="flex:0 0 auto;padding:3px 5px;border-top:1px solid #26262c;font-size:9px;color:#5f5f68;text-align:center;">PTT to go back</div>
+  </div>
+</div>
+
+<script>
+/* r1 Pokedex — offline bird identification.
+ *
+ * Everything here is shaped by measurements in the README, not guesses:
+ *   * 48 kHz mono with AGC/NS/AEC defeated is BirdNET V2.4's native input,
+ *     so 3 s = exactly 144000 float samples with no resampling.
+ *   * SDK wrappers are LATE-INJECTED. Checking window.creationStorage at
+ *     startup returns false and then true a moment later — that single
+ *     mistake is what made three rabbit APIs look missing for a week.
+ *   * Eight rapid PTT taps shut the device down, hence the trigger lockout.
+ *   * Never preventDefault a touch event; pointer events only.
+ *   * Confidence is NOT portable from desktop (0.81 there, 0.69 here for the
+ *     identical clip), so THRESHOLD must be tuned on the device.
+ */
+
+var SAMPLES = 144000;          // 3 s @ 48 kHz — the model's fixed input
+var RATE = 48000;
+var THRESHOLD = 0.15;          // tune ON DEVICE; desktop values do not transfer
+var LOCKOUT_MS = 800;          // guards the eight-rapid-taps shutdown
+var DEX_KEY = 'pokedex_v1';
+
+var el = function (id) { return document.getElementById(id); };
+var worker = null, ready = false, busy = false, lastTrigger = 0;
+var dex = {}, store = null, view = 'listen';
+
+/* ---------- status ---------- */
+function status(text, cls) {
+  el('status').textContent = text;
+  el('status').className = 'sp ' + (cls || '');
+}
+function stage(state, sub) {
+  el('state').textContent = state;
+  el('sub').textContent = sub || '';
+}
+
+/* ---------- storage ----------
+   creationStorage is host-backed and survives relaunch (verified with launch
+   counters). localStorage also survived, so it is a real fallback rather than
+   a token one — but prefer the host store, which is what it exists for. */
+function b64enc(s) { return btoa(unescape(encodeURIComponent(s))); }
+function b64dec(s) { return decodeURIComponent(escape(atob(s))); }
+
+function whenSDKReady(cb, timeoutMs) {
+  var t0 = Date.now();
+  (function tick() {
+    if (window.creationStorage && window.creationStorage.plain) { return cb(true); }
+    if (Date.now() - t0 > (timeoutMs || 8000)) { return cb(false); }
+    setTimeout(tick, 50);
+  })();
+}
+
+function makeStore(useHost) {
+  if (useHost) {
+    var s = window.creationStorage.plain;
+    return {
+      kind: 'creationStorage',
+      get: function () {
+        return Promise.resolve(s.getItem(DEX_KEY)).then(function (v) {
+          return v ? JSON.parse(b64dec(v)) : {};
+        });
+      },
+      set: function (obj) {
+        return Promise.resolve(s.setItem(DEX_KEY, b64enc(JSON.stringify(obj))));
+      }
+    };
+  }
+  return {
+    kind: 'localStorage',
+    get: function () {
+      try {
+        var v = localStorage.getItem(DEX_KEY);
+        return Promise.resolve(v ? JSON.parse(v) : {});
+      } catch (e) { return Promise.resolve({}); }
+    },
+    set: function (obj) {
+      try { localStorage.setItem(DEX_KEY, JSON.stringify(obj)); } catch (e) {}
+      return Promise.resolve();
+    }
+  };
+}
+
+/* ---------- dex ---------- */
+function renderDex() {
+  var list = el('dexList');
+  list.innerHTML = '';
+  var keys = Object.keys(dex);
+  if (!keys.length) {
+    var d = document.createElement('div');
+    d.id = 'empty';
+    d.textContent = 'no birds yet\nhold PTT near a bird';
+    list.appendChild(d);
+    el('title').textContent = 'DEX 0';
+    return;
+  }
+  keys.sort(function (a, b) { return dex[b].last - dex[a].last; });
+  el('title').textContent = 'DEX ' + keys.length;
+  keys.forEach(function (k) {
+    var e = dex[k];
+    var row = document.createElement('div');
+    row.className = 'entry';
+    var nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = e.common;
+    var ct = document.createElement('span');
+    ct.className = 'ct'; ct.textContent = 'x' + e.count;
+    var cf = document.createElement('span');
+    cf.className = 'cf'; cf.textContent = e.best.toFixed(2);
+    row.appendChild(nm); row.appendChild(ct); row.appendChild(cf);
+    list.appendChild(row);
+  });
+}
+
+function record(bird) {
+  var k = bird.sci;
+  var isNew = !dex[k];
+  var e = dex[k] || { common: bird.common, sci: bird.sci, count: 0, best: 0, first: Date.now() };
+  e.count++;
+  e.last = Date.now();
+  if (bird.confidence > e.best) { e.best = bird.confidence; }
+  dex[k] = e;
+  store.set(dex);
+  return isNew;
+}
+
+/* ---------- audio ---------- */
+/* The r1 mic is 48 kHz mono and lets AGC / noise-suppression / echo-cancel
+   all be disabled — which is exactly BirdNET's native input. Measured peak
+   was 0.0175, i.e. quiet; the model's mel front-end normalises per chunk, so
+   low level is fine, but the meter is there to prove audio is arriving. */
+function capture(onLevel) {
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1, sampleRate: RATE,
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false
+    }
+  }).then(function (stream) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var ctx = new AC({ sampleRate: RATE });
+    var src = ctx.createMediaStreamSource(stream);
+    var node = ctx.createScriptProcessor(4096, 1, 1);
+    var buf = new Float32Array(SAMPLES);
+    var n = 0;
+
+    return new Promise(function (resolve, reject) {
+      var finished = false;
+      function finish(err) {
+        if (finished) { return; }
+        finished = true;
+        try { node.disconnect(); src.disconnect(); } catch (e) {}
+        try { ctx.close(); } catch (e) {}
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        if (err) { reject(err); } else { resolve(buf); }
+      }
+
+      node.onaudioprocess = function (ev) {
+        if (finished) { return; }
+        var inp = ev.inputBuffer.getChannelData(0);
+        var peak = 0;
+        for (var i = 0; i < inp.length && n < SAMPLES; i++) {
+          var v = inp[i];
+          buf[n++] = v;
+          if (v > peak) { peak = v; } else if (-v > peak) { peak = -v; }
+        }
+        if (onLevel) { onLevel(peak, n / SAMPLES); }
+        if (n >= SAMPLES) { finish(null); }
+      };
+
+      src.connect(node);
+      node.connect(ctx.destination);
+
+      // The context can refuse 48 kHz; resampling silently would corrupt the
+      // model's input, so fail loudly instead.
+      if (Math.abs(ctx.sampleRate - RATE) > 1) {
+        finish(new Error('mic at ' + ctx.sampleRate + 'Hz, need ' + RATE));
+        return;
+      }
+      setTimeout(function () {
+        if (!finished) { finish(new Error('capture timed out')); }
+      }, 8000);
+    });
+  });
+}
+
+/* ---------- identify ---------- */
+function identify() {
+  var now = Date.now();
+  if (!ready || busy) { return; }
+  // Eight rapid PTT taps shut the r1 down. We cannot stop the taps reaching
+  // the device, but we refuse to pile work on top of them.
+  if (now - lastTrigger < LOCKOUT_MS) { return; }
+  lastTrigger = now;
+
+  busy = true;
+  el('card').classList.remove('on');
+  el('meterFill').style.width = '0';
+  el('meter').style.display = 'block';
+  stage('LISTENING', '3 seconds');
+
+  capture(function (peak, frac) {
+    el('meterFill').style.width = Math.min(100, peak * 3000) + '%';
+    el('sub').textContent = (3 - frac * 3).toFixed(1) + 's';
+  }).then(function (pcm) {
+    el('meter').style.display = 'none';
+    stage('IDENTIFYING', '');
+    worker.postMessage({ message: 'identify', pcm: pcm }, [pcm.buffer]);
+  }).catch(function (e) {
+    busy = false;
+    el('meter').style.display = 'none';
+    stage('MIC ERROR', (e && e.message) || String(e));
+  });
+}
+
+function showResult(d) {
+  busy = false;
+  var top = d.top || [];
+  if (!top.length || top[0].confidence < THRESHOLD) {
+    stage('NO MATCH', top.length
+      ? 'best ' + top[0].common + ' ' + top[0].confidence.toFixed(2)
+      : 'nothing heard');
+    return;
+  }
+  var best = top[0];
+  var isNew = record(best);
+
+  stage('', '');
+  el('card').classList.add('on');
+  el('common').textContent = best.common;
+  el('sci').textContent = best.sci;
+  el('confFill').style.width = Math.round(best.confidence * 100) + '%';
+  el('confTxt').textContent = best.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
+  el('badge').className = isNew ? 'on' : '';
+  el('alts').textContent = top.slice(1)
+    .map(function (b) { return b.common + ' ' + b.confidence.toFixed(2); })
+    .join('\n');
+  renderDex();
+}
+
+/* ---------- views ---------- */
+function show(name) {
+  view = name;
+  el('listen').className = 'view' + (name === 'listen' ? ' on' : '');
+  el('dex').className = 'view' + (name === 'dex' ? ' on' : '');
+  if (name === 'dex') { renderDex(); }
+  else { el('title').textContent = 'POKEDEX'; }
+}
+
+/* ---------- worker ---------- */
+function boot() {
+  worker = new Worker('birdnet.js');
+  worker.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (d.message === 'error') {
+      status('error', 'bad');
+      stage('FAILED', d.where + ': ' + String(d.error).slice(0, 60));
+      busy = false;
+      return;
+    }
+    if (d.message === 'load_progress') {
+      stage('STARTING', 'model ' + Math.round(d.progress * 100) + '%');
+      return;
+    }
+    if (d.message === 'warmup') { stage('STARTING', 'warming up'); return; }
+    if (d.message === 'ready') {
+      ready = true;
+      status('ready', 'good');
+      stage('READY', 'hold PTT');
+      return;
+    }
+    if (d.message === 'result') { showResult(d); return; }
+  });
+  worker.addEventListener('error', function (e) {
+    status('error', 'bad');
+    stage('WORKER FAILED', e.message || 'see console');
+  });
+}
+
+/* ---------- input ----------
+   Hardware events are dispatched by the host straight onto window — no SDK
+   wrapper needed, and no touch handlers, which is where the preventDefault
+   crash lives. */
+window.addEventListener('sideClick', function () {
+  if (view === 'dex') { show('listen'); } else { identify(); }
+});
+window.addEventListener('longPressEnd', function () {
+  if (view === 'listen') { identify(); }
+});
+window.addEventListener('scrollDown', function () {
+  if (view === 'listen') { show('dex'); }
+  else { el('dexList').scrollTop += 36; }
+});
+window.addEventListener('scrollUp', function () {
+  if (view === 'dex') {
+    if (el('dexList').scrollTop <= 0) { show('listen'); }
+    else { el('dexList').scrollTop -= 36; }
+  }
+});
+// Pointer fallback so the app is testable in a normal browser.
+el('stage').addEventListener('pointerdown', function () {
+  if (view === 'listen') { identify(); }
+});
+el('foot').addEventListener('pointerdown', function (e) {
+  e.stopPropagation(); show('dex');
+});
+el('foot2').addEventListener('pointerdown', function () { show('listen'); });
+
+/* ---------- startup ---------- */
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.register('sw.js').catch(function () {});
+}
+
+// Build stamp: a stale cached page is indistinguishable from a broken one.
+fetch('./index.html?cb=' + Math.random(), { cache: 'no-store' })
+  .then(function (r) { return r.text(); })
+  .then(function (h) {
+    var m = h.match(/name="build" content="([^"]+)"/);
+    if (m && m[1] !== window.__BUILD) {
+      el('title').textContent = 'STALE ' + window.__BUILD;
+      el('title').className = 'bad';
+    }
+  })
+  .catch(function () {});
+
+whenSDKReady(function (hasHost) {
+  store = makeStore(hasHost);
+  store.get().then(function (d) {
+    dex = d || {};
+    renderDex();
+    if (view === 'listen') { el('title').textContent = 'POKEDEX'; }
+  });
+  boot();
+});
+</script>
+</body>
+</html>

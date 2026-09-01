@@ -14,6 +14,8 @@ that simple-but-lossy beats correct-but-complex wherever the two compete.
 ## Layout
 
 ```
+app/                  **The Pokedex.** PTT -> 3 s -> species card, collection
+                        persisted, runs fully offline. See App below.
 probe/index.html      Device capability probe. Deploy this dir; open on the r1.
 bench/                BirdNET V2.4 WebGL benchmark. Fork of georg95/birdnet-web
                         with its two silent-hang bugs fixed; every await is
@@ -32,6 +34,41 @@ qr/                   Generated install QRs.
 Deploy: `git push` → GitHub Pages serves [/probe/](https://sebbyteadev.github.io/R1-Pokedex/probe/)
 and [/bench/](https://sebbyteadev.github.io/R1-Pokedex/bench/). Scan the QR in `qr/` once.
 The r1 re-fetches the page every launch, so pushing updates it without re-scanning.
+
+---
+
+## App
+
+`app/` — [sebbyteadev.github.io/R1-Pokedex/app/](https://sebbyteadev.github.io/R1-Pokedex/app/)
+
+**Controls.** PTT (`sideClick`) identifies; scroll down opens the dex; scroll up
+at the top of the dex returns. Pointer taps do the same so it is testable in a
+desktop browser.
+
+**Flow.** Hold PTT → 3 s capture at 48 kHz mono with AGC/NS/AEC disabled →
+144000 float samples straight into BirdNET, no resampling → species card with
+scientific name, confidence, runners-up, and a NEW badge on first sighting.
+Every hit is written to the collection.
+
+**Decisions that came from measurement, not taste:**
+
+| | |
+|---|---|
+| `THRESHOLD = 0.15` | **Tune on-device.** Desktop scored 0.81 where the r1 scored 0.69 on the same clip; confidence does not transfer |
+| `LOCKOUT_MS = 800` | Eight rapid PTT taps shut the r1 down. We cannot stop the taps, but we refuse to pile work on them |
+| `whenSDKReady` before storage | `creationStorage` is late-injected; a startup check returns false then true |
+| Capture fails loudly off 48 kHz | Silently resampling would corrupt the model's input |
+| No touch handlers | `preventDefault` on touch crashes the WebView ~3 s later |
+| Sigmoid not reapplied | The TF.js export has it baked in |
+
+**Storage** prefers `creationStorage` (host-backed, survives relaunch) and falls
+back to `localStorage`, which also survived relaunch in testing — a real
+fallback, not a token one.
+
+**Offline** is automatic: the service worker caches the shell network-first and
+the model cache-first, so the first online launch is the only one that fetches
+weights. Verified booting to READY with the server stopped and the collection
+intact.
 
 ---
 
