@@ -28,7 +28,21 @@ async function main() {
     var t = performance.now()
     await tf.setBackend('webgl')
     await tf.ready()
-    postMessage({ message: 'backend', backend: tf.getBackend(), ms: performance.now() - t })
+    // Precision matters as much as speed here: with no float32 render target
+    // tfjs silently falls back to f16 textures, and the hand-written FFT
+    // accumulates error — same species, lower confidence.
+    function flag(name) {
+        try { return String(tf.env().get(name)) } catch (e) { return '?' }
+    }
+    postMessage({
+        message: 'backend',
+        backend: tf.getBackend(),
+        ms: performance.now() - t,
+        webglVersion: flag('WEBGL_VERSION'),
+        renderF32: flag('WEBGL_RENDER_FLOAT32_ENABLED'),
+        forceF16: flag('WEBGL_FORCE_F16_TEXTURES'),
+        downloadF32: flag('WEBGL_DOWNLOAD_FLOAT_ENABLED')
+    })
 
     t = performance.now()
     var labels = (await fetch(BASE + 'labels/en_us.txt').then(function (r) {

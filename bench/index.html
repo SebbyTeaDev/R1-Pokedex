@@ -116,7 +116,10 @@ function bench() {
 
   step('backend', 'backend', 'tf.setBackend(webgl)', 30000)
     .then(function (d) {
-      line('  -> ' + d.backend, 'dim')
+      line('  -> ' + d.backend + ' v' + d.webglVersion, 'dim')
+      line('  -> render f32 ' + d.renderF32 + ', force f16 ' + d.forceF16,
+           d.renderF32 === 'true' ? 'dim' : 'err')
+      line('  -> download f32 ' + d.downloadF32, 'dim')
       return step('labels', 'labels', 'label list fetch', 60000)
     })
     .then(function (d) {

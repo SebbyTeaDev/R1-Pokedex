@@ -11,6 +11,9 @@ Audio ID via **BirdNET**; photo ID via a vision model over BYOK.
 
 ```
 probe/index.html      Device capability probe. Deploy this dir; open on the r1.
+bench/                BirdNET V2.4 WebGL benchmark. Fork of georg95/birdnet-web
+                        with its two silent-hang bugs fixed; every await is
+                        watchdogged so a hang names its own stage.
 tools/make-qr.js      Generate a creation-install QR:
                         node make-qr.js <out.svg> <title> <url> [desc] [themeColor]
 tools/qrcode.js       Vendored qrcode-generator (no CDN dependency).
@@ -18,8 +21,9 @@ tools/install.html    Interactive QR builder — open in a real browser, not a p
 qr/                   Generated install QRs.
 ```
 
-Deploy: drag `probe/` onto [Netlify Drop](https://app.netlify.com/drop) → scan `qr/r1-probe-qr.svg`.
-The r1 re-fetches the page every launch, so redeploying updates it without re-scanning.
+Deploy: `git push` → GitHub Pages serves [/probe/](https://sebbyteadev.github.io/R1-Pokedex/probe/)
+and [/bench/](https://sebbyteadev.github.io/R1-Pokedex/bench/). Scan the QR in `qr/` once.
+The r1 re-fetches the page every launch, so pushing updates it without re-scanning.
 
 ---
 
@@ -69,16 +73,57 @@ device had no GPU path — is the right architecture here.
 LiteRT.js (assumes a modern engine; Chrome 101 likely won't run it).
 
 Even at 2–4 s per identification, the UX works: hold PTT → record 3 s →
-species card. This is a point-and-identify gadget, not a continuous monitor.
+species card.
+
+**Measured 2026-09-01: it's far better than that.** See below — 882 ms/chunk,
+3.4× realtime. Continuous monitoring is no longer ruled out on speed grounds.
+
+---
+
+## BirdNET WebGL bench, measured on-device (2026-09-01)
+
+`bench/` — BirdNET V2.4, TF.js WebGL backend, 3 s chunk, 5 runs.
+
+| | r1 | Desktop ref | Note |
+|---|---|---|---|
+| Backend | webgl v2 | webgl v2 | |
+| Model load (52 MB) | 3970 ms | — | consistent across runs |
+| **Warmup** (shader compile) | **4281 ms** | 5672 ms | one-time; *faster* than desktop |
+| **Inference, median** | **882 ms** | 30 ms | 29× slower |
+| Inference, steady state | ~830 ms | — | run 5 of 5; still descending |
+| **Realtime factor** | **×3.40** | ×101 | |
+| Top species | Black-capped Chickadee | Black-capped Chickadee | ranking agrees ✅ |
+| Confidence | **0.69** | **0.81** | ⚠️ see precision, below |
+
+**Open question #1 is answered: under 2 s, so inference stays on-device.**
+
+**Warmup was never the risk.** 4281 ms of shader compile on the GE8320, *less*
+than the same code costs on desktop. The earlier 5322 ms figure came from
+upstream's timer, which runs until `loaded` and so also covers the 7 MB geo
+model and 520 KB of label files.
+
+**The confidence gap is the real finding.** Same input, same weights,
+deterministic math — 0.81 desktop vs 0.69 on-device means the r1 computes at
+lower numeric precision, most likely an f16 texture fallback when the GPU has
+no float32 render target. The bench now prints `render f32` / `force f16` so
+this is testable. Consequences: top-1 ranking survives, but **confidence
+values are not portable** — any detection threshold must be calibrated on the
+device, not on desktop, or quiet birds will fall below it as false negatives.
+
+**Continuous listening is back on the table.** At 3.4× realtime the GPU
+consumes audio faster than it arrives, so a rolling monitor is architecturally
+possible. The earlier "point-and-identify, not a continuous monitor" verdict
+was a CPU/WASM extrapolation made before WebGL was measured. Still unmeasured
+and still decisive: sustained GPU load, thermals, and battery.
 
 ---
 
 ## Open questions
 
-1. **Does the BirdNET WebGL benchmark actually run?** — `qr/birdnet-bench-qr.svg`
-   → [georg95/birdnet-web](https://github.com/georg95/birdnet-web) (upstream of Cornell's PWA).
-   Watch **warmup** (shader compile on GE8320 could be ~10 s) and **ms/chunk**.
-   Under ~2 s = product. Over ~6 s = inference goes server-side.
+1. ~~**Does the BirdNET WebGL benchmark actually run?**~~ **Answered 2026-09-01:
+   882 ms/chunk, ×3.40 realtime — inference stays on-device.** See the bench
+   table above. Successor question: **why is on-device confidence 0.69 vs
+   desktop 0.81?** Run `bench/` and read the `render f32` line.
 2. **Why are 3 of 6 rabbit APIs missing, and why is the viewport 240×152?**
    Both suggest the probe didn't load with full creation privileges.
    Resolve before designing a UI against the wrong dimensions.
@@ -96,6 +141,34 @@ species card. This is a point-and-identify gadget, not a continuous monitor.
 - The motorized camera is **not reachable** — it's a root-only sysfs node
   (`/sys/devices/platform/step_motor_ms35774/orientation`). Only `facingMode`.
 - Body must not scroll; implement scrolling yourself.
+- **Host on GitHub Pages, not Netlify Drop.** Drop mints a *new site per
+  deploy*, so every redeploy silently invalidates the printed QR. Pages gives a
+  stable URL — changes are a `git push` and the same QR keeps working.
+- **Never put a site password in front of a creation.** The WebView hits the
+  form with no keyboard, and same-origin worker scripts 401 behind it.
+
+### Upstream bugs in georg95/birdnet-web — do not rediscover
+
+`test-chirpity.html` cannot complete a run. Both failures present identically:
+the page sits on a stage forever with **no error**, because the worker's
+rejection never reaches the page. `bench/` is a fork that fixes both and
+reports every failure.
+
+- **Hangs at `Warm up...`** — `birdnet.js:5` reads `?lang=`; absent, it's
+  `null`, and `null.split('-')` throws *after* warmup and *before* it posts
+  `loaded`. Workaround on the upstream page: append `&lang=en_us`.
+- **Hangs at `Inference...`** — the page posts audio as `audioBuf`, the worker
+  reads `data.pcmAudio`. `undefined.length` throws. No workaround; the test
+  page has bit-rotted away from the worker it drives.
+- **`fast_fft=on` is a no-op.** `birdnet.js` never reads that parameter — the
+  page only echoes it into the log. It is not a setting.
+- **`file-upload-demo.html` is not a substitute on the r1.** It sends the right
+  field name, but gates loading behind `navigator.geolocation.getCurrentPosition`
+  and needs `<input type="file">`, which requires WebView `onShowFileChooser`.
+- The worker hardcodes site-root paths (`/birdnet-web/...`) for the geo model
+  and labels, so it only runs under that path on `georg95.github.io`. The model
+  is served with `Access-Control-Allow-Origin: *`, so a fork can load it
+  cross-origin without mirroring 52 MB.
 
 ## Model notes
 
