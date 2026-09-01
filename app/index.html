@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="a1">
-<script>window.__BUILD = "a1";</script>
+<meta name="build" content="a2">
+<script>window.__BUILD = "a2";</script>
 <style>
   /* Measured viewport is 240x292 (docs say 282 — trust the device). Nothing
      below hardcodes it: the 152 reading was never reproduced, so a surprise
@@ -42,13 +42,25 @@
   #state { font-size: 12px; color: #F59E0B; letter-spacing: .06em; }
   #sub { font-size: 9px; color: #7d7d86; margin-top: 3px; }
 
-  /* Hidden until recording — an empty bar above a result card reads as a
-     broken progress indicator. */
-  #meter {
-    display: none; width: 80%; height: 4px; margin-top: 8px;
-    background: #26262c; border-radius: 2px; overflow: hidden;
+  /* Hidden until recording — an empty panel above a result card reads as a
+     broken widget. Internal resolution is fixed at 180x64 and stretched, so
+     one column per animation frame lands on one pixel column. */
+  /* y is frequency, x is time — an earlier version labelled the horizontal
+     axis 15k..0, which described neither. */
+  #specWrap { display: none; position: relative; width: 92%; margin-top: 8px; }
+  #specWrap.on { display: block; }
+  #spec {
+    display: block; width: 100%; height: 64px;
+    background: #0d0d0f; border: 1px solid #26262c; border-radius: 2px;
+    image-rendering: pixelated;
   }
-  #meterFill { height: 100%; width: 0; background: #4ade80; transition: width .05s; }
+  .fl {
+    position: absolute; font-size: 8px; color: #7d7d86;
+    text-shadow: 0 0 3px #0d0d0f, 0 0 3px #0d0d0f; pointer-events: none;
+  }
+  .fl.top { left: 2px; top: 1px; }
+  .fl.bot { left: 2px; bottom: 1px; }
+  .fl.rt  { right: 2px; bottom: 1px; }
 
   #card { width: 100%; display: none; }
   #card.on { display: block; }
@@ -89,14 +101,23 @@
 <div id="app">
   <div id="bar">
     <span id="title">POKEDEX</span>
-    <span id="status" class="sp warn">booting</span>
+    <!-- Which hardware events this firmware actually dispatches is unverified.
+         Holding PTT does nothing on-device, so show the last event received
+         rather than guessing at why. -->
+    <span id="hw" class="sp"></span>
+    <span id="status" class="warn">booting</span>
   </div>
 
   <div id="listen" class="view on">
     <div id="stage">
       <div id="state">STARTING</div>
       <div id="sub">loading model</div>
-      <div id="meter"><div id="meterFill"></div></div>
+      <div id="specWrap">
+        <canvas id="spec" width="180" height="64"></canvas>
+        <span class="fl top">15k</span>
+        <span class="fl bot">0Hz</span>
+        <span class="fl rt">3s</span>
+      </div>
       <div id="card">
         <div id="common"></div>
         <div id="sci"></div>
@@ -243,57 +264,144 @@ function record(bird) {
    all be disabled — which is exactly BirdNET's native input. Measured peak
    was 0.0175, i.e. quiet; the model's mel front-end normalises per chunk, so
    low level is fine, but the meter is there to prove audio is arriving. */
-function capture(onLevel) {
-  return navigator.mediaDevices.getUserMedia({
+/* Every await here is bounded. The first version timed out only AFTER
+   getUserMedia resolved, so a permission prompt that never returned left the
+   UI on LISTENING forever with nothing to explain it. */
+function withTimeout(p, ms, what) {
+  return new Promise(function (resolve, reject) {
+    var done = false;
+    var t = setTimeout(function () {
+      if (!done) { done = true; reject(new Error('timeout: ' + what)); }
+    }, ms);
+    p.then(function (v) { if (!done) { done = true; clearTimeout(t); resolve(v); } },
+           function (e) { if (!done) { done = true; clearTimeout(t); reject(e); } });
+  });
+}
+
+/* ---------- spectrogram ---------- */
+var specCv = null, sctx = null, specX = 0;
+
+function specReset() {
+  specCv = el('spec');
+  sctx = specCv.getContext('2d');
+  sctx.fillStyle = '#0d0d0f';
+  sctx.fillRect(0, 0, specCv.width, specCv.height);
+  specX = 0;
+}
+// Dark -> amber -> white. Bird calls sit well above the noise floor, so a
+// simple ramp separates them clearly without a full colormap.
+function heat(v) {
+  if (v < 0.5) {
+    var a = v / 0.5;
+    return 'rgb(' + ((13 + a * 232) | 0) + ',' + ((13 + a * 145) | 0) + ',' + ((15 - a * 4) | 0) + ')';
+  }
+  var b = (v - 0.5) / 0.5;
+  return 'rgb(245,' + ((158 + b * 97) | 0) + ',' + ((11 + b * 244) | 0) + ')';
+}
+/* Drawn against capture progress, not frame rate. Tying columns to
+   requestAnimationFrame made the panel fill at whatever rate the device
+   happened to render — ~10 columns of 180 in 1.6 s on a throttled tab. The
+   panel represents a fixed 3 s window, so column position is progress. */
+function specDrawTo(progress, data, maxBin) {
+  var H = specCv.height, W = specCv.width;
+  var target = Math.min(W - 1, (progress * W) | 0);
+  while (specX <= target) {
+    for (var y = 0; y < H; y++) {
+      var bin = ((1 - y / H) * maxBin) | 0;   // low frequencies at the bottom
+      var v = data[bin] / 255;
+      sctx.fillStyle = heat(v * v);            // square it: suppress the floor
+      sctx.fillRect(specX, y, 1, 1);
+    }
+    specX++;
+  }
+}
+
+function capture(onProgress) {
+  var stream = null, ctx = null, src = null, node = null, analyser = null, raf = 0;
+
+  function teardown() {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    try { node && node.disconnect(); } catch (e) {}
+    try { src && src.disconnect(); } catch (e) {}
+    try { ctx && ctx.close(); } catch (e) {}
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
+  }
+
+  // Bounded: on the r1 a permission prompt may never resolve at all.
+  return withTimeout(navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1, sampleRate: RATE,
       echoCancellation: false, noiseSuppression: false, autoGainControl: false
     }
-  }).then(function (stream) {
+  }), 7000, 'mic permission').then(function (s) {
+    stream = s;
     var AC = window.AudioContext || window.webkitAudioContext;
-    var ctx = new AC({ sampleRate: RATE });
-    var src = ctx.createMediaStreamSource(stream);
-    var node = ctx.createScriptProcessor(4096, 1, 1);
+    ctx = new AC({ sampleRate: RATE });
+    // A suspended context never fires audio callbacks — silent stall.
+    return (ctx.state === 'suspended' ? ctx.resume() : Promise.resolve());
+  }).then(function () {
+    if (Math.abs(ctx.sampleRate - RATE) > 1) {
+      // Resampling silently would corrupt the model's input. Fail loudly.
+      throw new Error('mic at ' + ctx.sampleRate + 'Hz, need ' + RATE);
+    }
+
+    src = ctx.createMediaStreamSource(stream);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;               // 512 bins over 0..24 kHz
+    analyser.smoothingTimeConstant = 0.35;
+    node = ctx.createScriptProcessor(4096, 1, 1);
+
     var buf = new Float32Array(SAMPLES);
     var n = 0;
+    // BirdNET's mel front-end tops out around 15 kHz; showing 0..24 kHz would
+    // waste half the panel on band the model ignores.
+    var maxBin = Math.round(15000 / (RATE / 2) * analyser.frequencyBinCount);
+    var freq = new Uint8Array(analyser.frequencyBinCount);
+
+    specReset();
 
     return new Promise(function (resolve, reject) {
       var finished = false;
+      var gotAudio = false;
       function finish(err) {
         if (finished) { return; }
         finished = true;
-        try { node.disconnect(); src.disconnect(); } catch (e) {}
-        try { ctx.close(); } catch (e) {}
-        stream.getTracks().forEach(function (t) { t.stop(); });
+        teardown();
         if (err) { reject(err); } else { resolve(buf); }
       }
 
       node.onaudioprocess = function (ev) {
         if (finished) { return; }
+        gotAudio = true;
         var inp = ev.inputBuffer.getChannelData(0);
-        var peak = 0;
-        for (var i = 0; i < inp.length && n < SAMPLES; i++) {
-          var v = inp[i];
-          buf[n++] = v;
-          if (v > peak) { peak = v; } else if (-v > peak) { peak = -v; }
-        }
-        if (onLevel) { onLevel(peak, n / SAMPLES); }
+        for (var i = 0; i < inp.length && n < SAMPLES; i++) { buf[n++] = inp[i]; }
+        if (onProgress) { onProgress(n / SAMPLES); }
         if (n >= SAMPLES) { finish(null); }
       };
 
+      function draw() {
+        if (finished) { return; }
+        analyser.getByteFrequencyData(freq);
+        specDrawTo(n / SAMPLES, freq, maxBin);
+        raf = requestAnimationFrame(draw);
+      }
+
+      src.connect(analyser);
       src.connect(node);
       node.connect(ctx.destination);
+      raf = requestAnimationFrame(draw);
 
-      // The context can refuse 48 kHz; resampling silently would corrupt the
-      // model's input, so fail loudly instead.
-      if (Math.abs(ctx.sampleRate - RATE) > 1) {
-        finish(new Error('mic at ' + ctx.sampleRate + 'Hz, need ' + RATE));
-        return;
-      }
+      // Distinguish "mic never delivered a sample" from "capture is slow".
       setTimeout(function () {
-        if (!finished) { finish(new Error('capture timed out')); }
-      }, 8000);
+        if (!gotAudio && !finished) { finish(new Error('mic delivered no audio')); }
+      }, 2500);
+      setTimeout(function () {
+        if (!finished) { finish(new Error('capture stalled at ' + n + '/' + SAMPLES)); }
+      }, 9000);
     });
+  }).catch(function (e) {
+    teardown();
+    throw e;
   });
 }
 
@@ -308,26 +416,29 @@ function identify() {
 
   busy = true;
   el('card').classList.remove('on');
-  el('meterFill').style.width = '0';
-  el('meter').style.display = 'block';
-  stage('LISTENING', '3 seconds');
+  el('specWrap').className = 'on';
+  
+  stage('LISTENING', '3.0s');
 
-  capture(function (peak, frac) {
-    el('meterFill').style.width = Math.min(100, peak * 3000) + '%';
+  capture(function (frac) {
     el('sub').textContent = (3 - frac * 3).toFixed(1) + 's';
   }).then(function (pcm) {
-    el('meter').style.display = 'none';
-    stage('IDENTIFYING', '');
+    // Leave the spectrogram up through inference: it is what the model is
+    // looking at, and ~0.9s of blank screen otherwise reads as a freeze.
+    stage('IDENTIFYING', 'heard 3.0s');
     worker.postMessage({ message: 'identify', pcm: pcm }, [pcm.buffer]);
   }).catch(function (e) {
     busy = false;
-    el('meter').style.display = 'none';
+    el('specWrap').className = '';
+    
     stage('MIC ERROR', (e && e.message) || String(e));
   });
 }
 
 function showResult(d) {
   busy = false;
+  el('specWrap').className = '';
+  
   var top = d.top || [];
   if (!top.length || top[0].confidence < THRESHOLD) {
     stage('NO MATCH', top.length
@@ -379,7 +490,7 @@ function boot() {
     if (d.message === 'ready') {
       ready = true;
       status('ready', 'good');
-      stage('READY', 'hold PTT');
+      stage('READY', 'press PTT');
       return;
     }
     if (d.message === 'result') { showResult(d); return; }
@@ -394,9 +505,20 @@ function boot() {
    Hardware events are dispatched by the host straight onto window — no SDK
    wrapper needed, and no touch handlers, which is where the preventDefault
    crash lives. */
+var hwSeen = {};
+function sawHW(name) {
+  hwSeen[name] = (hwSeen[name] || 0) + 1;
+  el('hw').textContent = name;
+}
+// Register every documented event so the readout reveals what actually fires.
+['sideClick', 'longPressStart', 'longPressEnd', 'scrollUp', 'scrollDown']
+  .forEach(function (n) { window.addEventListener(n, function () { sawHW(n); }); });
+
 window.addEventListener('sideClick', function () {
   if (view === 'dex') { show('listen'); } else { identify(); }
 });
+// Kept in case this firmware does dispatch them — harmless if it never does,
+// and identify() is idempotent while busy.
 window.addEventListener('longPressEnd', function () {
   if (view === 'listen') { identify(); }
 });

@@ -45,6 +45,19 @@ The r1 re-fetches the page every launch, so pushing updates it without re-scanni
 at the top of the dex returns. Pointer taps do the same so it is testable in a
 desktop browser.
 
+**`sideClick` fires; holding PTT does nothing.** `longPressStart` /
+`longPressEnd` produced no events on-device, so press-to-identify is the real
+interaction and hold is not advertised in the UI. The listeners are still
+registered, and the title bar shows the last hardware event received, so if a
+firmware update starts dispatching them it will be visible rather than assumed.
+
+**Live spectrogram** during the 3 s capture: y is frequency (0–15 kHz, the band
+BirdNET's mel front-end actually uses), x is time. Columns are drawn against
+**capture progress, not frame rate** — tying them to `requestAnimationFrame`
+filled the panel at whatever rate the device rendered, which on a throttled tab
+was ~10 columns of 180 in 1.6 s. It stays up through inference, because ~0.9 s
+of blank screen reads as a freeze.
+
 **Flow.** Hold PTT → 3 s capture at 48 kHz mono with AGC/NS/AEC disabled →
 144000 float samples straight into BirdNET, no resampling → species card with
 scientific name, confidence, runners-up, and a NEW badge on first sighting.
