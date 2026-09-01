@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b4">
-<script>window.__BUILD = "b4";</script>
+<meta name="build" content="b5">
+<script>window.__BUILD = "b5";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -301,6 +301,9 @@
 
 var SAMPLES = 144000, RATE = 48000;
 var LOCKOUT_MS = 800;
+/* 7s was not enough: this covers a human reading and accepting a permission
+   prompt, not just a machine returning a stream. */
+var MIC_TIMEOUT = 25000;
 var DEX_KEY = 'pokedex_v1', ZIP_KEY = 'pokedex_zip';
 
 /* Confidence bands. These are DEVICE numbers and do not port: the r1 reads
@@ -482,7 +485,7 @@ function capture(onProg) {
   return withTimeout(navigator.mediaDevices.getUserMedia({ audio:{
       channelCount:1, sampleRate:RATE,
       echoCancellation:false, noiseSuppression:false, autoGainControl:false
-    }}), 7000, 'mic permission').then(function (s) {
+    }}), MIC_TIMEOUT, 'mic permission').then(function (s) {
     stream = s;
     var AC = window.AudioContext || window.webkitAudioContext;
     ctx = new AC({ sampleRate:RATE });
@@ -556,7 +559,18 @@ function identify() {
     })
     .catch(function (e) {
       busy = false; leds(1, 0, 0);
-      showPlain('MIC ERROR', 'MIC ERROR', (e && e.message) || String(e));
+      pendingPcm = null;
+      // Distinguish denied from timed-out from absent: they need different
+      // fixes and "MIC ERROR" alone tells the user nothing.
+      var n = e && e.name, msg = (e && e.message) || String(e);
+      if (n === 'NotAllowedError' || n === 'SecurityError') {
+        msg = 'permission denied - allow the mic and relaunch';
+      } else if (n === 'NotFoundError' || n === 'NotReadableError') {
+        msg = 'no mic available (' + n + ')';
+      } else if (msg.indexOf('timeout') === 0) {
+        msg = 'no response from mic - try again';
+      }
+      showPlain('MIC ERROR', 'MIC ERROR', msg);
     });
 }
 
@@ -578,6 +592,7 @@ function showPlain(t, head, sub) {
 }
 
 function showResult(d) {
+  if (photoWanted && !photoIdx) { setTimeout(loadPhotos, 300); }
   var top = d.top || [];
   /* BirdNET is authoritative for wild species. YAMNet is asked ONLY when
      BirdNET has nothing, because YAMNet's best bird answer is the word "Bird"
@@ -754,6 +769,7 @@ function show(name) {
   ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','zip'].forEach(function (v) {
     el('v-' + v).className = 'view' + (v === name ? ' on' : '');
   });
+  if (name === 'dex' || name === 'brow' || name === 'entry' || name === 'res') { loadPhotos(); }
   if (name === 'home') { title('POKEDEX'); renderHome(); }
   else if (name === 'dex') { renderDex(); }
   else if (name === 'cfg') { title('CONFIG'); renderCfg(); }
@@ -1222,8 +1238,12 @@ function zipCommit() {
 var photoBuf = null, photoIdx = null, credits = null;
 var photoCache = {}, photoOrder = [];
 
+var photoWanted = false;
 function loadPhotos() {
   if (photoIdx) { return; }
+  photoWanted = true;
+  // Never compete with a live capture for bandwidth or main-thread time.
+  if (busy) { return; }
   fetch('data/birds.idx.json').then(function (r) { return r.json(); })
     .then(function (idx) {
       photoIdx = idx;
@@ -1316,8 +1336,13 @@ function boot() {
     }
     if (d.message === 'warmup') { el('bootSub').textContent = 'warming up'; leds(0, 1, 0); return; }
     if (d.message === 'ready') {
-      ready = true; leds(0, 0, 1); show('home'); requestGeo(); loadPhotos();
-      bootYam(); return;
+      ready = true; leds(0, 0, 1); show('home'); requestGeo(); bootYam();
+      // Photos are 28.6MB. Starting that download the moment the model is
+      // ready puts it in direct competition with the user's first PTT, so
+      // hold it until the app has been idle for a moment. Anything that
+      // actually needs a photo calls loadPhotos() itself.
+      setTimeout(function () { if (!busy) { loadPhotos(); } }, 4000);
+      return;
     }
     if (d.message === 'geo_loading') { title('RANGE...'); return; }
     if (d.message === 'geo') {
