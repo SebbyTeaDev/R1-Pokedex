@@ -22,6 +22,15 @@ importScripts('./vendor/tf.min.js')
 // cached for field use. Same-origin also drops the third-party dependency.
 var BASE = '../models/birdnet/'
 
+// BirdNET V2.4 emits 6522 labels, but 11 of them are not birds — they are the
+// model's way of saying "that was not a bird". Verified against
+// models/birdnet/labels/en_us.txt. Real species count is 6511.
+var NON_SPECIES = {
+    'Dog': 1, 'Engine': 1, 'Environmental': 1, 'Fireworks': 1, 'Gun': 1,
+    'Human non-vocal': 1, 'Human vocal': 1, 'Human whistle': 1,
+    'Noise': 1, 'Power tools': 1, 'Siren': 1
+}
+
 function fail(where, e) {
     postMessage({ message: 'error', where: where, error: (e && e.stack) || String(e) })
 }
@@ -82,10 +91,15 @@ async function main() {
         for (var i = 0; i < scores.length; i++) {
             if (scores[i] > 0.03) {
                 var parts = (labels[i] || '_').split('_')
+                var sci = parts[0] || '?'
                 top.push({
-                    sci: parts[0] || '?',
-                    common: parts[1] || parts[0] || '?',
-                    confidence: scores[i]
+                    sci: sci,
+                    common: parts[1] || sci,
+                    confidence: scores[i],
+                    // 11 of the 6522 labels are not birds. Flag them here so the
+                    // UI can report interference instead of filing a passing
+                    // siren in the collection as a species.
+                    noise: NON_SPECIES[sci] === 1
                 })
             }
         }
