@@ -112,20 +112,41 @@ Measured on-device, against an RTX 4090 reference:
 | `render f32` / `force f16` | true / false | true / false | storage fp32 ✅ |
 | `highp` mantissa | 23b | 23b | ALU is fp32 ✅ |
 | `mediump` mantissa | **10b** | 23b | ⚠️ latent trap |
-| cos err @2π | 2.4e-5 | 6.4e-7 | 37× worse |
-| cos err @3000 rad | **1.2e-7** | 2.9e-4 | 2400× **better** |
+| cos err @2π | **2.4e-5** | 6.4e-7 | 37× worse ⚠️ |
+| cos err @3000 rad | 1.2e-7 | 2.9e-4 | 2400× better |
+| `pow` rel err | 1.3e-7 | 1.3e-7 | identical ✅ |
+| **STFT checksum** | **8293.712** | 8293.448 | **diverges** ⚠️ |
 
 - **Ruled out: f16 texture fallback.** Storage precision is fp32, same as desktop.
 - **Ruled out: fp16 ALU.** `highp` is a full 23-bit mantissa.
-- **Ruled out: loose transcendentals in the FFT.** At the argument range the
-  twiddle factors actually use, PowerVR is *more* accurate than ANGLE/D3D11,
-  which does sloppy range reduction for large arguments. The r1 is only worse
-  near 2π, which the kernel barely touches.
-- **Still open**, and now being measured: GLSL `pow` accuracy (the mel layer
-  raises every bin to ~x^0.226, and `pow` is `exp2(y*log2(x))`, which is loose
-  on mobile), plus an isolated STFT checksum that will exonerate or convict the
-  whole front-end in one number. Desktop ref: pow rel err 1.3e-7, checksum
-  8293.448.
+- **Ruled out: GLSL `pow`.** 1.3e-7 relative error, identical to desktop.
+- **Convicted: the STFT front-end.** Running the kernel alone on a fixed
+  signal gives checksum **8293.712** on the r1 vs **8293.448** on desktop —
+  3.2e-5 relative divergence across 15903 deterministic values.
+
+**Mechanism.** The kernel calls `cos`/`sin` at two different argument ranges,
+and they behave oppositely on this GPU:
+
+| Pass | Argument range | r1 vs desktop |
+|---|---|---|
+| Windowing (once) | up to ~3000 rad | 2400× **better** |
+| Butterflies (×9) | `(π/len)*(k%len)` ∈ [0, π] | 37× **worse** |
+
+The butterflies dominate — nine stages of compounding — and they sit squarely
+in the small-argument regime where PowerVR is the weaker of the two. Measured
+STFT divergence (3.2e-5) is the same order as the measured cos error near 2π
+(2.4e-5). *Do not conclude "transcendentals are fine" from the large-argument
+number alone; that was an early wrong turn here.*
+
+**Fix available:** precompute the twiddle factors into a lookup texture instead
+of evaluating `cos`/`sin` per shader invocation. Removes the error source
+entirely and is likely also faster — 9 stages × 513 bins of transcendental
+evaluation per chunk becomes a texture fetch.
+
+**Caveat, unproven:** 3.2e-5 at the front end producing 0.81 → 0.69 at the
+output implies ~2e4 amplification through the conv stack. Large but not
+impossible for a deep net. The STFT divergence is established; that it fully
+accounts for the confidence gap is not.
 
 **`mediump` being 10b on the r1 and 23b on desktop is a trap worth
 remembering** even though it isn't the current cause. Desktop GPUs promote
@@ -151,8 +172,10 @@ and still decisive: sustained GPU load, thermals, and battery.
 1. ~~**Does the BirdNET WebGL benchmark actually run?**~~ **Answered 2026-09-01:
    882 ms/chunk, ×3.40 realtime — inference stays on-device.** See the bench
    table above. Successor question: **why is on-device confidence 0.69 vs
-   desktop 0.81?** Not an f16 texture fallback — that's ruled out. Run
-   `bench/` and read the `shader mantissa` and `cos err` lines.
+   desktop 0.81?** **Localized:** the STFT front-end diverges (checksum
+   8293.712 vs 8293.448), driven by small-argument `cos`/`sin` error compounding
+   through nine butterfly stages. Fix is a twiddle-factor lookup texture.
+   Whether that closes the full confidence gap is untested.
 2. **Why are 3 of 6 rabbit APIs missing, and why is the viewport 240×152?**
    Both suggest the probe didn't load with full creation privileges.
    Resolve before designing a UI against the wrong dimensions.
