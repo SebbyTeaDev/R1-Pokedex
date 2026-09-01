@@ -88,11 +88,35 @@ window.addEventListener('longPressEnd',   fn)
 That is the whole PTT interaction, host-dispatched, no bridge protocol needed —
 and better than touch events, which carry the `preventDefault` crash risk.
 
-**The wrapper layer did not appear in our diff.** Only the bridges did. Note
-rabbit's own demo guards with `typeof window.creationSensors === 'undefined'`,
-so absence is a state they anticipate rather than an anomaly. The probe now
-settles it by *doing* a `setItem`/`getItem` round-trip instead of checking for
-presence, and polls 6 s in case injection is late.
+**The wrapper layer is late-injected — this is the single most important fact
+about writing a creation.** The `__atStart` diff (captured in `<head>`) sees
+only the 7 bridges; `window.creationStorage` and `window.creationSensors` are
+absent then and present within 6 s. Verified on-device:
+
+- `creationStorage` — **`setItem`/`getItem` round-trip OK, values persist** ✅
+- `creationSensors.accelerometer.isAvailable()` — **true** ✅
+
+Nothing was ever missing. The original "3 of 6 absent" was a one-shot check at
+script-parse time, the same root cause as the 240×152 viewport: **both original
+anomalies were measurements taken before the environment settled.**
+
+```js
+// Never do this at startup — it is false at parse time and true a moment later.
+if (window.creationStorage) { ... }
+
+// Wait for the SDK layer instead.
+function whenSDKReady(cb, timeoutMs) {
+  var t0 = Date.now();
+  (function tick() {
+    if (window.creationStorage && window.creationSensors) { return cb(true); }
+    if (Date.now() - t0 > (timeoutMs || 8000)) { return cb(false); }
+    setTimeout(tick, 50);
+  })();
+}
+```
+
+Always keep the `cb(false)` path working — availability is not guaranteed, and
+rabbit's own demo guards for absence too.
 
 **Docs say 240×282 throughout; the device measures 240×292. Trust the device.**
 
@@ -279,12 +303,11 @@ and still decisive: sustained GPU load, thermals, and battery.
    cause is unknown rather than absent — build so that a surprise viewport
    degrades instead of breaking.
 
-   **Still open — the rabbit API surface.** Diffing `window` against a clean
-   `about:blank` window finds **7 host-injected globals**, more than the six
-   names anyone was guessing at, and each is an object exposing `postMessage`.
-   So the surface is message-passing bridges, not direct method calls: using
-   any of them means sending a message and awaiting a reply, and needing the
-   protocol. Names not yet captured.
+   **The rabbit API surface: also answered — nothing was missing.** All 7
+   bridges are present, and the `creationStorage` / `creationSensors` wrappers
+   arrive within 6 s. Storage round-trips and the accelerometer reports
+   available. The original "3 of 6" was a one-shot check run before injection,
+   the same root cause as the viewport misread. See the API section above.
 3. **Offline.** A creation is fetched from its URL on *every* launch and the shell
    HTML isn't cached between loads — no network, no app. Zero of 600+ known
    creations use a service worker. Unexplored, and it matters for field birding.
