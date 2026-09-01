@@ -93,28 +93,49 @@ async function main() {
         return worst
     }
 
-    // Run the STFT kernel alone on a fixed signal. If this checksum differs
-    // between devices, the front-end is the divergence; if it matches, the
-    // FFT is exonerated and the difference is downstream.
-    async function stftSum() {
-        var n = 16384
+    // Run the STFT kernel alone on a fixed signal and score it against an
+    // exact fp64 DFT computed here in JS. Comparing against truth rather than
+    // against another GPU means the bench self-validates on any device — a
+    // cross-device checksum can only say "different", not "wrong".
+    async function stftCheck() {
+        var FL = 1024, FS = 512, n = 4096
+        var frames = (n - FL + FS) / FS
         var sig = new Float32Array(n)
         for (var i = 0; i < n; i++) {
             sig[i] = Math.sin(i * 0.01) * 0.5 + Math.sin(i * 0.13) * 0.25
         }
         var out = tf.engine().runKernel('STFT', {
-            signal: tf.tensor1d(sig), frameLength: 1024, frameStep: 512
+            signal: tf.tensor1d(sig), frameLength: FL, frameStep: FS
         })
-        var arr = await out.data()
+        var got = await out.data()
         out.dispose()
-        var sum = 0
-        for (var j = 0; j < arr.length; j++) { sum += Math.abs(arr[j]) }
-        return sum
+
+        var win = new Float64Array(FL)
+        for (var w = 0; w < FL; w++) {
+            win[w] = 0.5 - 0.5 * Math.cos(2 * Math.PI * w / FL)
+        }
+        var sum = 0, worst = 0, scale = 0
+        for (var f = 0; f < frames; f++) {
+            var buf = new Float64Array(FL)
+            for (var s = 0; s < FL; s++) { buf[s] = sig[f * FS + s] * win[s] }
+            for (var k = 0; k <= FL / 2; k++) {
+                var re = 0
+                for (var m = 0; m < FL; m++) {
+                    re += buf[m] * Math.cos(2 * Math.PI * k * m / FL)
+                }
+                var g = got[f * (FL / 2 + 1) + k]
+                var err = Math.abs(g - re)
+                if (err > worst) { worst = err }
+                if (Math.abs(re) > scale) { scale = Math.abs(re) }
+                sum += Math.abs(g)
+            }
+        }
+        return { sum: sum, relErr: worst / Math.max(scale, 1e-9) }
     }
 
-    var powErr = -1, stft = -1
+    var powErr = -1, stft = { sum: -1, relErr: -1 }
     try { powErr = await powError() } catch (e) { powErr = -1 }
-    try { stft = await stftSum() } catch (e) { stft = -1 }
+    try { stft = await stftCheck() } catch (e) { stft = { sum: -1, relErr: -1 } }
 
     postMessage({
         message: 'precision',
@@ -124,7 +145,8 @@ async function main() {
         cosErrSmall: await cosError(6.283185307179586),
         cosErrLarge: await cosError(3000),
         powErr: powErr,
-        stft: stft
+        stft: stft.sum,
+        stftRelErr: stft.relErr
     })
 
     t = performance.now()
@@ -240,14 +262,69 @@ class MelSpecLayerSimple extends tf.layers.Layer {
 }
 tf.serialization.registerClass(MelSpecLayerSimple)
 
+// ---- Twiddle / window lookup tables ------------------------------------
+//
+// Upstream evaluates cos/sin per shader invocation. Measured on the r1
+// (PowerVR GE8320): small-argument cos is 37x less accurate than desktop,
+// and the nine butterfly stages all sit in that range, compounding. That
+// showed up as an STFT checksum divergence of 3.2e-5 and a species
+// confidence of 0.69 vs desktop's 0.81.
+//
+// Both tables are computed here in fp64 and uploaded as fp32, so the shader
+// does a texture fetch instead of a transcendental. Exact on every GPU, and
+// cheaper: 9 stages x 513 bins of cos/sin per chunk becomes a lookup.
+//
+// tw[j] = (cos(pi*j/innerDim), sin(pi*j/innerDim)), j = 0..innerDim
+//   butterflies: t = (pi/len)*(k%len), so j = (k%len)*(innerDim/len).
+//     len and innerDim are both powers of two, so the stride is exact.
+//   reassemble:  t = -pi*i/innerDim, so j = i and the sine is negated.
+//     needs j == innerDim, hence the +1 entry.
+//
+// win[i] = 0.5 - 0.5*cos(2*pi*i/frameLength)
+//   Upstream computes cos(2*pi*q/frameLength) with q up to ~500k. cos is
+//   2*pi-periodic and q = coords[0]*frameLength + i, so that is identically
+//   cos(2*pi*i/frameLength) — the large argument is spurious, and it is
+//   what triggers ANGLE/D3D11's sloppy range reduction (2.9e-4 on desktop).
+
+var TWIDDLE_CACHE = {}
+var WINDOW_CACHE = {}
+
+function twiddleLUT(innerDim) {
+    if (!TWIDDLE_CACHE[innerDim]) {
+        var d = new Float32Array((innerDim + 1) * 2)
+        for (var j = 0; j <= innerDim; j++) {
+            var t = Math.PI * j / innerDim
+            d[j * 2] = Math.cos(t)
+            d[j * 2 + 1] = Math.sin(t)
+        }
+        // keep(): the kernel runs inside MelSpecLayerSimple's tf.tidy, which
+        // would otherwise dispose the cached table after the first chunk.
+        TWIDDLE_CACHE[innerDim] = tf.keep(tf.tensor2d(d, [innerDim + 1, 2]))
+    }
+    return TWIDDLE_CACHE[innerDim]
+}
+
+function windowLUT(frameLength) {
+    if (!WINDOW_CACHE[frameLength]) {
+        var d = new Float32Array(frameLength)
+        for (var i = 0; i < frameLength; i++) {
+            d[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / frameLength)
+        }
+        WINDOW_CACHE[frameLength] = tf.keep(tf.tensor1d(d))
+    }
+    return WINDOW_CACHE[frameLength]
+}
+
 tf.registerKernel({
     kernelName: 'STFT',
     backendName: 'webgl',
     kernelFunc: ({ backend, inputs: { signal, frameLength, frameStep } }) => {
         const innerDim = frameLength / 2
         const batch = (signal.size - frameLength + frameStep) / frameStep | 0
+        const tw = twiddleLUT(innerDim)
+        const win = windowLUT(frameLength)
         let currentTensor = backend.runWebGLProgram({
-            variableNames: ['x'],
+            variableNames: ['x', 'win'],
             outputShape: [batch, frameLength],
             userCode: `
             void main() {
@@ -263,15 +340,14 @@ tf.registerKernel({
                 }
                 int q = coords[0] * ${frameLength} + i;
                 float val = getX((q / ${frameLength}) * ${frameStep} + q % ${frameLength});
-                float cosArg = ${2.0 * Math.PI / frameLength} * float(q);
-                float mul = 0.5 - 0.5 * cos(cosArg);
+                float mul = getWin(i);
                 setOutput(val * mul);
             }`
-        }, [signal], 'float32')
+        }, [signal, win], 'float32')
         for (let len = 1; len < innerDim; len *= 2) {
             let prevTensor = currentTensor
             currentTensor = backend.runWebGLProgram({
-                variableNames: ['x'],
+                variableNames: ['x', 'tw'],
                 outputShape: [batch, innerDim * 2],
                 userCode: `void main() {
                     ivec2 coords = getOutputCoords();
@@ -281,9 +357,9 @@ tf.registerKernel({
                     int isHigh = (k % ${len * 2}) / ${len};
                     int highSign = (1 - isHigh * 2);
                     int baseIndex = k - isHigh * ${len};
-                    float t = ${Math.PI / len} * float(k % ${len});
-                    float a = cos(t);
-                    float b = sin(-t);
+                    int j = (k % ${len}) * ${innerDim / len};
+                    float a = getTw(j, 0);
+                    float b = -getTw(j, 1);
                     float oddK_re = getX(batch, baseIndex + ${len});
                     float oddK_im = getX(batch, baseIndex + ${len + innerDim});
                     if (i < ${innerDim}) { // real
@@ -294,11 +370,11 @@ tf.registerKernel({
                         setOutput(evenK_im + (oddK_re * b + oddK_im * a) * float(highSign));
                     }
                 }`
-            }, [currentTensor], 'float32')
+            }, [currentTensor, tw], 'float32')
             backend.disposeIntermediateTensorInfo(prevTensor)
         }
         const real = backend.runWebGLProgram({
-            variableNames: ['x'],
+            variableNames: ['x', 'tw'],
             outputShape: [batch, innerDim + 1],
             userCode: `void main() {
                 ivec2 coords = getOutputCoords();
@@ -310,13 +386,15 @@ tf.registerKernel({
                 float Zk1 = getX(batch, zI+${innerDim});
                 float Zk_conj0 = getX(batch, conjI);
                 float Zk_conj1 = -getX(batch, conjI+${innerDim});
-                float t = ${-2 * Math.PI} * float(i) / float(${innerDim * 2});
+                // t = -pi*i/innerDim, so cos(t) = tw[i].x and sin(t) = -tw[i].y
+                float cosT = getTw(i, 0);
+                float sinT = -getTw(i, 1);
                 float diff0 = Zk0 - Zk_conj0;
                 float diff1 = Zk1 - Zk_conj1;
-                float result = (Zk0 + Zk_conj0 + cos(t) * diff1 + sin(t) * diff0) * 0.5;
+                float result = (Zk0 + Zk_conj0 + cosT * diff1 + sinT * diff0) * 0.5;
                 setOutput(result);
             }`
-        }, [currentTensor], 'float32')
+        }, [currentTensor, tw], 'float32')
         backend.disposeIntermediateTensorInfo(currentTensor)
         return real
     }

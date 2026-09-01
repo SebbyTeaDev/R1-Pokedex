@@ -135,11 +135,11 @@ function bench() {
            d.cosErrLarge > 1e-2 ? 'err' : 'dim')
       line('  -> pow rel err ' + d.powErr.toExponential(1) + ' (ref 1.3e-7)',
            d.powErr > 1e-4 ? 'err' : 'dim')
-      // Both sides are deterministic, so ANY deviation is real divergence.
-      // Threshold is fp32 accumulation slack over 15903 values, not a
-      // tolerance for a genuinely different result. r1 measures 8293.712.
-      line('  -> stft checksum ' + d.stft.toFixed(3) + ' (ref 8293.448)',
-           Math.abs(d.stft - 8293.448) > 0.01 ? 'err' : 'dim')
+      // Scored against an exact fp64 DFT, so this is accuracy, not just
+      // agreement with some other GPU. fp32 floor is ~1e-7.
+      line('  -> stft err vs exact ' + d.stftRelErr.toExponential(1),
+           d.stftRelErr > 1e-5 ? 'err' : 'dim')
+      line('  -> stft checksum ' + d.stft.toFixed(3), 'dim')
       return step('labels', 'labels', 'label list fetch', 60000)
     })
     .then(function (d) {
