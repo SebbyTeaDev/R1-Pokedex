@@ -14,7 +14,10 @@
 
 importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js')
 
-var BASE = 'https://georg95.github.io/birdnet-web/models/birdnet/'
+// Same-origin, mirrored into this repo. Cross-origin worked, but the service
+// worker skips cross-origin requests by design, so the model could never be
+// cached for field use. Same-origin also drops the third-party dependency.
+var BASE = '../models/birdnet/'
 
 function fail(where, e) {
     postMessage({ message: 'error', where: where, error: (e && e.stack) || String(e) })
