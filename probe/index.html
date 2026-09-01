@@ -57,6 +57,7 @@
   <section><h2>Display</h2><div id="s-display"></div></section>
   <section><h2>Viewport over time</h2><div id="s-vp"></div></section>
   <section><h2>Injected globals</h2><div id="s-inj"></div></section>
+  <section><h2>SDK layer</h2><div id="s-sdk"></div></section>
   <section><h2>Engine</h2><div id="s-engine"></div></section>
   <section><h2>WASM</h2><div id="s-wasm"></div></section>
   <section><h2>Graphics</h2><div id="s-gfx"></div></section>
@@ -185,6 +186,104 @@
     [500, 2000, 5000].forEach(function (ms) {
       setTimeout(function () { recheck(ms); }, ms);
     });
+  })();
+
+  /* ---------- SDK wrapper layer ----------
+     The *Handler globals are low-level Flutter bridges. rabbit's own SDK demo
+     (rabbit-hmi-oss/creations-sdk) bundles no shim and calls window.creation*
+     directly, so the wrappers are meant to be host-injected too. Its own code
+     still guards with `typeof window.creationSensors === 'undefined'`, so
+     absence is a known state. This checks whether they turn up at all, then
+     proves storage with a real round-trip rather than a presence check. */
+  (function () {
+    var wrappers = ["creationStorage", "creationSensors"];
+    var rows = {};
+    wrappers.forEach(function (n) {
+      rows[n] = row("s-sdk", n, "absent @0ms", "bad");
+    });
+    var storageRow = row("s-sdk", "storage round-trip", "waiting for API", "warn");
+    var accelRow = row("s-sdk", "accel isAvailable", "waiting for API", "warn");
+    var done = false;
+
+    function proveStorage() {
+      var s = window.creationStorage && window.creationStorage.plain;
+      if (!s || !s.setItem) {
+        storageRow.lastChild.textContent = "no plain.setItem";
+        storageRow.lastChild.className = "v bad";
+        return;
+      }
+      var key = "__probe_roundtrip";
+      var val = btoa(JSON.stringify({ t: Date.now() }));
+      storageRow.lastChild.textContent = "writing...";
+      Promise.resolve(s.setItem(key, val))
+        .then(function () { return s.getItem(key); })
+        .then(function (got) {
+          var ok = got === val;
+          storageRow.lastChild.textContent = ok
+            ? "OK — persists"
+            : "MISMATCH got " + String(got).slice(0, 24);
+          storageRow.lastChild.className = "v " + (ok ? "ok" : "bad");
+        })
+        .catch(function (e) {
+          storageRow.lastChild.textContent = "threw: " + (e && e.message || e);
+          storageRow.lastChild.className = "v bad";
+        });
+    }
+
+    function proveAccel() {
+      var a = window.creationSensors && window.creationSensors.accelerometer;
+      if (!a) {
+        accelRow.lastChild.textContent = "no accelerometer";
+        accelRow.lastChild.className = "v bad";
+        return;
+      }
+      if (!a.isAvailable) {
+        accelRow.lastChild.textContent = "present, no isAvailable()";
+        accelRow.lastChild.className = "v warn";
+        return;
+      }
+      Promise.resolve(a.isAvailable())
+        .then(function (v) {
+          accelRow.lastChild.textContent = yn(v);
+          accelRow.lastChild.className = "v " + cls(v);
+        })
+        .catch(function (e) {
+          accelRow.lastChild.textContent = "threw: " + (e && e.message || e);
+          accelRow.lastChild.className = "v bad";
+        });
+    }
+
+    function poll(ms) {
+      var all = true;
+      wrappers.forEach(function (n) {
+        if (window[n]) {
+          rows[n].lastChild.textContent = "present @" + ms + "ms";
+          rows[n].lastChild.className = "v ok";
+        } else {
+          all = false;
+          rows[n].lastChild.textContent = "absent @" + ms + "ms";
+        }
+      });
+      if (all && !done) { done = true; proveStorage(); proveAccel(); }
+    }
+    poll(0);
+    [250, 1000, 3000, 6000].forEach(function (ms) {
+      setTimeout(function () { poll(ms); }, ms);
+    });
+    setTimeout(function () {
+      if (done) { return; }
+      /* Partial availability still worth exercising. */
+      if (window.creationStorage) { proveStorage(); }
+      else {
+        storageRow.lastChild.textContent = "wrapper never appeared";
+        storageRow.lastChild.className = "v bad";
+      }
+      if (window.creationSensors) { proveAccel(); }
+      else {
+        accelRow.lastChild.textContent = "wrapper never appeared";
+        accelRow.lastChild.className = "v bad";
+      }
+    }, 6500);
   })();
 
   /* ---------- viewport over time ---------- */
