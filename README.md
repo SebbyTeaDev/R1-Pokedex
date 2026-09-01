@@ -138,10 +138,28 @@ STFT divergence (3.2e-5) is the same order as the measured cos error near 2π
 (2.4e-5). *Do not conclude "transcendentals are fine" from the large-argument
 number alone; that was an early wrong turn here.*
 
-**Fix available:** precompute the twiddle factors into a lookup texture instead
-of evaluating `cos`/`sin` per shader invocation. Removes the error source
-entirely and is likely also faster — 9 stages × 513 bins of transcendental
-evaluation per chunk becomes a texture fetch.
+**Fixed** (`bench/birdnet-worker.js`): twiddle factors and the Hann window are
+now precomputed in fp64 on the CPU and uploaded as fp32 tables, so the shader
+does a texture fetch instead of a transcendental. One twiddle table serves both
+the butterflies (`j = (k%len)*(innerDim/len)`) and the reassemble pass
+(`j = i`, sine negated) — both reduce to `π·j/innerDim`.
+
+The window pass also computed `cos(2π·q/frameLength)` with `q` up to ~500k.
+Since `cos` is 2π-periodic and `q = coords[0]*frameLength + i`, that is
+identically `cos(2π·i/frameLength)` — **the large argument was spurious**, and
+it was what triggered ANGLE/D3D11's sloppy range reduction on desktop.
+
+The bench now scores the kernel against an exact fp64 DFT rather than against
+another GPU, so it measures accuracy instead of agreement. Desktop (RTX 4090):
+
+| STFT implementation | err vs exact |
+|---|---|
+| in-shader `cos`/`sin` (upstream) | 8.6e-7 |
+| **lookup tables** | **6.2e-8** — the fp32 floor, 14× better |
+
+Species and timing unchanged on desktop (0.81, ~26 ms/chunk). The r1 should
+gain considerably more, since its small-argument `cos` was 37× looser than
+desktop's and that is the error the twiddle table removes.
 
 **Caveat, unproven:** 3.2e-5 at the front end producing 0.81 → 0.69 at the
 output implies ~2e4 amplification through the conv stack. Large but not
