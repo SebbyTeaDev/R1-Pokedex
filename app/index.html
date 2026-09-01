@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b7">
-<script>window.__BUILD = "b7";</script>
+<meta name="build" content="b8">
+<script>window.__BUILD = "b8";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -191,6 +191,19 @@
   .eRow span { flex:1 1 auto; text-align:right; overflow:hidden;
                white-space:nowrap; text-overflow:ellipsis; }
 
+  /* ---- monitor ---- */
+  #monSpec { display:block; width:100%; height:72px; image-rendering:pixelated;
+             background:var(--sunk); border:1px solid var(--line-hi); border-radius:2px; }
+  #monStat { display:flex; gap:6px; font-size:9px; color:var(--ink2); padding:3px 1px 0; }
+  #monStat b { font-weight:normal; color:var(--ink3); }
+  #monStat .sp { margin-left:auto; }
+  .mrow { display:flex; gap:5px; align-items:baseline; padding:3px 5px;
+          border-bottom:1px solid #1B1B20; }
+  .mrow .nm { flex:1 1 auto; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .mrow .hit { flex:0 0 auto; color:var(--amber); font-size:10px; }
+  .mrow .cf { flex:0 0 auto; font-size:9px; width:26px; text-align:right; }
+  .mrow.fresh { background:var(--sel); }
+
   /* ---- zip reel ---- */
   #zipDigits { margin-top:8px; font-size:22px; letter-spacing:4px; }
   #zipDigits span { padding:0 2px; }
@@ -263,6 +276,16 @@
   <div id="v-entry" class="view"><div id="entryWrap"></div></div>
   <div id="v-cfg" class="view"><div id="cfgList" class="list"></div></div>
 
+  <div id="v-mon" class="view">
+    <div style="flex:0 0 auto;padding:4px 5px 0">
+      <div id="monSpecWrap" style="position:relative">
+        <canvas id="monSpec" width="480" height="72"></canvas>
+        <span class="fl t">15k</span><span class="fl b">0Hz</span>
+      </div>
+      <div id="monStat"></div>
+    </div>
+    <div id="monList" class="list"></div>
+  </div>
   <div id="v-mic" class="view"><div id="micList" class="list"></div></div>
   <div id="v-zip" class="view">
     <div class="mid">
@@ -343,6 +366,7 @@ function bandOf(c) {
 var el = function (id) { return document.getElementById(id); };
 var worker = null, ready = false, busy = false, lastTrigger = 0, lastCommit = 0;
 var yam = null, yamOn = true, pendingPcm = null, birdVerdict = null;
+var mode = 'single';        // 'monitor' routes results to the session list
 var YAM_KEY = 'pokedex_yam';
 var dex = {}, store = null, zip = null, nearby = null;
 var TAXA = {}, ZIP3 = {};
@@ -537,6 +561,226 @@ function capture(onProg) {
   }).catch(function (e) { teardown(); throw e; });
 }
 
+/* ---------- continuous monitor ----------
+   A 3-second grab is a tight window to catch a bird in. The device has the
+   headroom to just keep listening: inference measured 882 ms per 3 s chunk,
+   so at a 1.5 s hop there is roughly 2x slack.
+
+   Windows OVERLAP by 50% deliberately — a call landing across a window
+   boundary would otherwise be split across two chunks and possibly missed by
+   both. The cost is double the inference, which the headroom covers.
+
+   If inference ever falls behind the hop, chunks are DROPPED rather than
+   queued: a queue would grow without bound and report birds from minutes ago
+   as if they were present. Drops are counted and shown. */
+var WINDOW = 144000, HOP = 72000;
+var mon = null;
+
+function monStart() {
+  if (mon || !ready) { return; }
+  mode = 'monitor';
+  mon = { ring:new Float32Array(WINDOW), pos:0, total:0, lastAt:0,
+          inFlight:false, chunks:0, drops:0, t0:Date.now(), hits:{},
+          stream:null, ctx:null, src:null, node:null, an:null, raf:0, freq:null,
+          maxBin:0, stopping:false };
+  show('mon'); title('LISTENING'); leds(0, 2, 0);
+  monRender();
+
+  withTimeout(navigator.mediaDevices.getUserMedia({ audio:{
+      channelCount:1, sampleRate:RATE,
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false
+    }}), MIC_TIMEOUT, 'mic permission').then(function (stream) {
+    if (!mon) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+    mon.stream = stream;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    mon.ctx = new AC({ sampleRate:RATE });
+    return mon.ctx.state === 'suspended' ? mon.ctx.resume() : Promise.resolve();
+  }).then(function () {
+    if (!mon || !mon.ctx) { return; }
+    if (Math.abs(mon.ctx.sampleRate - RATE) > 1) {
+      throw new Error('mic at ' + mon.ctx.sampleRate + 'Hz, need ' + RATE);
+    }
+    mon.src = mon.ctx.createMediaStreamSource(mon.stream);
+    mon.an = mon.ctx.createAnalyser();
+    mon.an.fftSize = 2048; mon.an.smoothingTimeConstant = 0.25;
+    mon.freq = new Uint8Array(mon.an.frequencyBinCount);
+    mon.maxBin = Math.round(15000 / (RATE / 2) * mon.an.frequencyBinCount);
+    mon.node = mon.ctx.createScriptProcessor(4096, 1, 1);
+    mon.node.onaudioprocess = monAudio;
+    mon.src.connect(mon.an); mon.src.connect(mon.node);
+    mon.node.connect(mon.ctx.destination);
+    monScrollInit();
+    mon.raf = requestAnimationFrame(monDraw);
+  }).catch(function (e) {
+    var n = (e && e.name) || '', msg = (e && e.message) || String(e);
+    monStop();
+    showPlain('MIC ERROR', 'MIC ERROR',
+      n === 'NotAllowedError' ? 'permission denied - see CFG > MIC TEST' : msg);
+  });
+}
+
+function monAudio(ev) {
+  if (!mon || mon.stopping) { return; }
+  var d = ev.inputBuffer.getChannelData(0);
+  for (var i = 0; i < d.length; i++) {
+    mon.ring[mon.pos] = d[i];
+    mon.pos = (mon.pos + 1) % WINDOW;
+    mon.total++;
+  }
+  if (mon.total < WINDOW) { return; }                 // not a full window yet
+  if (mon.total - mon.lastAt < HOP) { return; }
+  mon.lastAt = mon.total;
+  if (mon.inFlight) { mon.drops++; monRender(); return; }   // drop, never queue
+  // Unroll the ring so the chunk is in true time order.
+  var out = new Float32Array(WINDOW);
+  var p = mon.pos;
+  for (var j = 0; j < WINDOW; j++) { out[j] = mon.ring[(p + j) % WINDOW]; }
+  mon.inFlight = true;
+  worker.postMessage({ message:'identify', pcm:out }, [out.buffer]);
+}
+
+/* The monitor spectrogram scrolls continuously rather than filling a fixed
+   3 s panel, because there is no longer a fixed window to fill. */
+var mctx = null, mx = 0, mcol = null;
+function monScrollInit() {
+  var c = el('monSpec');
+  mctx = c.getContext('2d');
+  mctx.fillStyle = '#08080A'; mctx.fillRect(0, 0, c.width, c.height);
+  mcol = mctx.createImageData(1, c.height);
+  mx = 0;
+}
+function monDraw() {
+  if (!mon || mon.stopping) { return; }
+  mon.an.getByteFrequencyData(mon.freq);
+  var c = el('monSpec'), H = c.height, W = c.width, px = mcol.data;
+  if (mx >= W) { mctx.drawImage(c, -1, 0); mx = W - 1; }   // scroll left
+  for (var y = 0; y < H; y++) {
+    var v = mon.freq[((1 - y / H) * mon.maxBin) | 0] / 255;
+    v = v * v;
+    var r, g, b;
+    if (v < 0.5) { var a = v * 2; r = 13 + a*232 | 0; g = 13 + a*145 | 0; b = 15 - a*4 | 0; }
+    else { var t = (v - 0.5) * 2; r = 245; g = 158 + t*97 | 0; b = 11 + t*244 | 0; }
+    var o = y * 4;
+    px[o] = r; px[o+1] = g; px[o+2] = b; px[o+3] = 255;
+  }
+  mctx.putImageData(mcol, mx, 0);
+  mx++;
+  mon.raf = requestAnimationFrame(monDraw);
+}
+
+function monResult(d) {
+  if (!mon) { return; }
+  mon.inFlight = false;
+  mon.chunks++;
+  var top = (d.top || []).filter(function (t) { return !t.noise; });
+  if (top.length && top[0].confidence >= SHOW_MIN) {
+    var b = top[0];
+    var h = mon.hits[b.sci] || { sci:b.sci, common:b.common, best:0, n:0,
+                                 geo:b.geo, taxon:taxonOf(b.sci) };
+    h.n++;
+    if (b.confidence > h.best) { h.best = b.confidence; }
+    h.at = Date.now();
+    mon.hits[b.sci] = h;
+  }
+  monRender();
+}
+
+function monHits() {
+  var k = Object.keys(mon.hits);
+  k.sort(function (a, b) { return mon.hits[b].best - mon.hits[a].best; });
+  return k.map(function (x) { return mon.hits[x]; });
+}
+
+function monRender() {
+  if (!mon) { return; }
+  var secs = Math.round((Date.now() - mon.t0) / 1000);
+  var st = el('monStat');
+  st.innerHTML = '';
+  function cell(k, v, right) {
+    var d = document.createElement('span');
+    if (right) { d.className = 'sp'; }
+    var b = document.createElement('b'); b.textContent = k + ' ';
+    d.appendChild(b); d.appendChild(document.createTextNode(v));
+    st.appendChild(d);
+  }
+  cell('t', (secs / 60 | 0) + ':' + ('0' + (secs % 60)).slice(-2));
+  cell('win', String(mon.chunks));
+  cell('drop', String(mon.drops), true);
+
+  var l = el('monList');
+  l.innerHTML = '';
+  var hits = monHits();
+  if (!hits.length) {
+    var h = document.createElement('div');
+    h.className = 'hint';
+    h.textContent = mon.chunks ? 'listening...\nnothing identified yet'
+                               : 'listening...\nfirst result in ~3s';
+    l.appendChild(h);
+    return;
+  }
+  var now = Date.now();
+  hits.forEach(function (x) {
+    var d = document.createElement('div');
+    // Highlight anything heard in the last few seconds so a bird calling right
+    // now is distinguishable from one heard early in the session.
+    d.className = 'mrow' + (now - x.at < 6000 ? ' fresh' : '');
+    var nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = x.common;
+    if (x.best < recordMin()) { nm.style.color = 'var(--ink3)'; }
+    d.appendChild(nm);
+    if (x.taxon !== 'bird') {
+      var tx = document.createElement('span');
+      tx.className = 'rt tx ' + x.taxon; tx.textContent = TAXON_SHORT[x.taxon];
+      d.appendChild(tx);
+    }
+    var hit = document.createElement('span');
+    hit.className = 'hit'; hit.textContent = 'x' + x.n;
+    d.appendChild(hit);
+    var cf = document.createElement('span');
+    cf.className = 'cf';
+    cf.textContent = x.best.toFixed(2);
+    cf.style.color = x.best >= recordMin() ? 'var(--green)' : 'var(--ink3)';
+    d.appendChild(cf);
+    l.appendChild(d);
+  });
+}
+
+/* Nothing is written to the collection until the session ends. Saving on
+   every window would let one noisy minute enter the same bird a dozen times
+   and inflate its count meaninglessly. */
+function monStop() {
+  if (!mon) { return; }
+  mon.stopping = true;
+  if (mon.raf) { cancelAnimationFrame(mon.raf); }
+  try { mon.node && (mon.node.onaudioprocess = null); } catch (e) {}
+  try { mon.node && mon.node.disconnect(); mon.src && mon.src.disconnect(); } catch (e) {}
+  try { mon.ctx && mon.ctx.close(); } catch (e) {}
+  if (mon.stream) { mon.stream.getTracks().forEach(function (t) { t.stop(); }); }
+
+  var hits = monHits(), saved = 0, fresh = 0;
+  hits.forEach(function (x) {
+    if (x.best >= recordMin()) {
+      var isNew = record({ sci:x.sci, common:x.common, confidence:x.best, geo:x.geo });
+      saved++; if (isNew) { fresh++; }
+    }
+  });
+  var secs = Math.round((Date.now() - mon.t0) / 1000);
+  var chunks = mon.chunks, drops = mon.drops;
+  mon = null; mode = 'single'; leds(0, 0, 1);
+
+  show('res'); clearCard();
+  title(fresh ? 'NEW ENTRIES' : 'SESSION DONE');
+  el('photoTxt').textContent = String(saved);
+  if (fresh) { addChip(fresh + ' NEW', 'new'); }
+  el('common').textContent = saved + (saved === 1 ? ' species' : ' species');
+  el('sci').textContent = 'from ' + (secs / 60 | 0) + 'm' + ('0' + (secs % 60)).slice(-2) +
+                          's, ' + chunks + ' windows' + (drops ? ', ' + drops + ' dropped' : '');
+  el('alts').textContent = hits.slice(0, 6).map(function (x) {
+    return (x.best >= recordMin() ? '' : '(') + x.common + ' ' + x.best.toFixed(2) +
+           ' x' + x.n + (x.best >= recordMin() ? '' : ')');
+  }).join('\n');
+}
+
 /* ---------- identify ---------- */
 function identify() {
   var now = Date.now();
@@ -593,6 +837,7 @@ function showPlain(t, head, sub) {
 }
 
 function showResult(d) {
+  if (mode === 'monitor') { monResult(d); return; }
   if (photoWanted && !photoIdx) { setTimeout(loadPhotos, 300); }
   var top = d.top || [];
   /* BirdNET is authoritative for wild species. YAMNet is asked ONLY when
@@ -709,12 +954,15 @@ function addChip(text, cls) {
 
 /* ---------- views + focus ---------- */
 var RAILS = {
-  home: [['SCAN', function(){ identify(); }],
-         ['DEX',  function(){ show('dexmenu'); }],
-         ['CFG',  function(){ show('cfg'); }]],
-  res:  [['SCAN', function(){ identify(); }],
-         ['DEX',  function(){ show('dexmenu'); }],
-         ['HOME', function(){ show('home'); }]]
+  home: [['SCAN',  function(){ identify(); }],
+         ['LISTEN', function(){ monStart(); }],
+         ['DEX',    function(){ show('dexmenu'); }],
+         ['CFG',    function(){ show('cfg'); }]],
+  mon:  [['STOP',   function(){ monStop(); }]],
+  res:  [['SCAN',   function(){ identify(); }],
+         ['LISTEN', function(){ monStart(); }],
+         ['DEX',    function(){ show('dexmenu'); }],
+         ['HOME',   function(){ show('home'); }]]
 };
 
 function dexKeys() {
@@ -772,7 +1020,7 @@ function focusables() {
 
 function show(name) {
   view = name; focus = 0;
-  ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','mic','zip'].forEach(function (v) {
+  ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','mic','mon','zip'].forEach(function (v) {
     el('v-' + v).className = 'view' + (v === name ? ' on' : '');
   });
   if (name === 'dex' || name === 'brow' || name === 'entry' || name === 'res') { loadPhotos(); }
@@ -784,6 +1032,7 @@ function show(name) {
   else if (name === 'brow') { renderBrow(); }
   else if (name === 'entry') { renderEntry(); }
   else if (name === 'mic') { title('MIC TEST'); }
+  else if (name === 'mon') { title('LISTENING'); }
   else if (name === 'zip') { title('ZIP CODE'); }
   renderRail();
 }
@@ -1616,6 +1865,8 @@ function activate(idx) {
 function commit() { activate(); }
 function move(dir) {
   if (shotOpen) { closeShot(); return; }
+  // Scrolling the session list is more useful than moving a one-cell rail.
+  if (view === 'mon') { el('monList').scrollTop += dir * 36; return; }
   if (view === 'cap' || view === 'boot') { return; }
   if (view === 'zip') { zipTurn(dir); return; }
   if (eraseCount) { eraseCount = 0; }                  // any wheel cancels erase
