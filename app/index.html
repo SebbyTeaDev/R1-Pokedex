@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="a3">
-<script>window.__BUILD = "a3";</script>
+<meta name="build" content="a4">
+<script>window.__BUILD = "a4";</script>
 <style>
   /* Measured viewport is 240x292 (docs say 282 — trust the device). Nothing
      below hardcodes it: the 152 reading was never reproduced, so a surprise
@@ -78,6 +78,18 @@
     border-radius: 3px; letter-spacing: .08em;
   }
   #badge.on { display: inline-block; }
+  /* Non-bird catches are the surprise, so they get a colour of their own. */
+  #taxon { display: none; margin-left: 4px; font-size: 9px; font-weight: bold;
+           padding: 2px 5px; border-radius: 3px; letter-spacing: .08em;
+           color: #0d0d0f; vertical-align: 2px; }
+  #taxon.on { display: inline-block; }
+  .t-amphibian { background: #4DA6FF; }
+  .t-insect    { background: #C792EA; }
+  .t-mammal    { background: #F59E0B; }
+  .entry .tx { flex: 0 0 auto; font-size: 8px; letter-spacing: .06em; }
+  .tx-amphibian { color: #4DA6FF; }
+  .tx-insect    { color: #C792EA; }
+  .tx-mammal    { color: #F59E0B; }
   /* pre-line: runners-up are newline-joined and must stay one per line. */
   #alts { margin-top: 6px; font-size: 9px; color: #7E7E88; white-space: pre-line; }
 
@@ -123,7 +135,7 @@
         <div id="sci"></div>
         <div id="conf"><div id="confFill"></div></div>
         <div id="confTxt"></div>
-        <div id="badge">NEW</div>
+        <div id="badge">NEW</div><span id="taxon"></span>
         <div id="alts"></div>
       </div>
     </div>
@@ -160,6 +172,21 @@ var DEX_KEY = 'pokedex_v1';
 var el = function (id) { return document.getElementById(id); };
 var worker = null, ready = false, busy = false, lastTrigger = 0;
 var dex = {}, store = null, view = 'listen';
+
+/* ---------- taxonomy ----------
+   BirdNET is not only birds: 41 amphibians, 40 insects and 7 mammals are in
+   the label set, and were being filed as birds. Classified by GENUS, not by
+   common name — name matching pulls in Bee-eaters, Grasshopper Warblers,
+   Squirrel Cuckoo, Fox Sparrow and Killdeer, 35 false positives in all. */
+var TAXA = {};                       // genus -> amphibian|insect|mammal
+var TAXON_ICON  = { bird: '', amphibian: 'AMPHIBIAN', insect: 'INSECT', mammal: 'MAMMAL' };
+// Distinct 3-letter codes, not truncations of the full word — slicing gave
+// "INSE" and "MAMM", which read as bugs rather than labels.
+var TAXON_SHORT = { bird: '', amphibian: 'AMP', insect: 'INS', mammal: 'MAM' };
+
+function taxonOf(sci) {
+  return TAXA[String(sci).split(' ')[0]] || 'bird';
+}
 
 /* ---------- status ---------- */
 function status(text, cls) {
@@ -242,7 +269,16 @@ function renderDex() {
     ct.className = 'ct'; ct.textContent = 'x' + e.count;
     var cf = document.createElement('span');
     cf.className = 'cf'; cf.textContent = e.best.toFixed(2);
-    row.appendChild(nm); row.appendChild(ct); row.appendChild(cf);
+    var tax = e.taxon || taxonOf(e.sci);
+    if (tax !== 'bird') {
+      var tx = document.createElement('span');
+      tx.className = 'tx tx-' + tax;
+      tx.textContent = TAXON_SHORT[tax];
+      row.appendChild(nm); row.appendChild(tx);
+    } else {
+      row.appendChild(nm);
+    }
+    row.appendChild(ct); row.appendChild(cf);
     list.appendChild(row);
   });
 }
@@ -250,7 +286,9 @@ function renderDex() {
 function record(bird) {
   var k = bird.sci;
   var isNew = !dex[k];
-  var e = dex[k] || { common: bird.common, sci: bird.sci, count: 0, best: 0, first: Date.now() };
+  var e = dex[k] || { common: bird.common, sci: bird.sci, taxon: taxonOf(bird.sci),
+                      count: 0, best: 0, first: Date.now() };
+  if (!e.taxon) { e.taxon = taxonOf(bird.sci); }   // backfill pre-taxon records
   e.count++;
   e.last = Date.now();
   if (bird.confidence > e.best) { e.best = bird.confidence; }
@@ -462,6 +500,9 @@ function showResult(d) {
   el('confFill').style.width = Math.round(best.confidence * 100) + '%';
   el('confTxt').textContent = best.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
   el('badge').className = isNew ? 'on' : '';
+  var tax = taxonOf(best.sci);
+  el('taxon').textContent = TAXON_ICON[tax];
+  el('taxon').className = tax === 'bird' ? '' : 'on t-' + tax;
   el('alts').textContent = top.slice(1)
     .map(function (b) { return b.common + ' ' + b.confidence.toFixed(2); })
     .join('\n');
@@ -563,6 +604,10 @@ fetch('./index.html?cb=' + Math.random(), { cache: 'no-store' })
     }
   })
   .catch(function () {});
+
+fetch('data/taxa.json').then(function (r) { return r.json(); })
+  .then(function (t) { TAXA = t; renderDex(); })
+  .catch(function () { /* all species simply read as birds */ });
 
 whenSDKReady(function (hasHost) {
   store = makeStore(hasHost);

@@ -429,6 +429,33 @@ reports every failure.
   is served with `Access-Control-Allow-Origin: *`, so a fork can load it
   cross-origin without mirroring 52 MB.
 
+## BirdNET is not only birds
+
+Of the 6522 labels, **11 are not animals** and **87 are not birds**:
+
+| Group | Count | Examples |
+|---|---|---|
+| Birds | 6423 | |
+| Amphibians | 41 | Spring Peeper, American Bullfrog, Gray Treefrog |
+| Insects | 40 | Snowy Tree Cricket, Common True Katydid, Protean Shieldback |
+| Mammals | 7 | Coyote, Gray Wolf, White-tailed Deer, Eastern Chipmunk |
+| Not animals | 11 | Siren, Engine, Gun, Fireworks, Power tools, Human x3 |
+
+So this is already a general animal identifier and simply was not saying so.
+`app/data/taxa.json` (762 B) maps the 34 non-bird genera; everything else is a
+bird.
+
+**Classify by GENUS, never by common name.** Name matching produces 35 false
+positives -- Bee-eaters, Grasshopper Warblers, Mouse-colored Antshrike, Squirrel
+Cuckoo, Fox Sparrow, Bat Falcon, and *Killdeer* (contains "deer"). It also
+misses `Atlanticus testaceus`, whose common name is "Protean Shieldback" and
+contains no insect word at all.
+
+The 11 non-animal labels are the model saying *"that was not an animal"*; they
+surface as an INTERFERENCE result and are never recorded.
+
+---
+
 ## Model notes
 
 - **V2.4**: input `float32[1,144000]`, output `[1,6522]` **logits** (TFLite/ONNX)
