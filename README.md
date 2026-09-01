@@ -35,7 +35,7 @@ The r1 re-fetches the page every launch, so pushing updates it without re-scanni
 
 | | Value | Note |
 |---|---|---|
-| Viewport | **240×152** | Docs say 240×282 — see open questions |
+| **Viewport** | **240×292** | Docs say 240×282. Was misread as 240×152 — see below |
 | Screen / DPR | 240×320 / 2 | |
 | Chrome (WebView) | **101** | 2022-era. Hard ceiling on modern APIs. |
 | Android | 13 | |
@@ -52,8 +52,13 @@ The r1 re-fetches the page every launch, so pushing updates it without re-scanni
 
 ### Rabbit API surface actually present
 
-✅ `PluginMessageHandler` · `TouchEventHandler` · `closeWebView`
+By name: ✅ `PluginMessageHandler` · `TouchEventHandler` · `closeWebView`
 ❌ `creationStorage` · `CreationVoiceHandler` · `creationSensors`
+
+**But name-checking was the wrong method.** Diffing `window` against a clean
+`about:blank` window finds **7 injected globals**, each an object exposing
+`postMessage`. At least four are therefore reachable under names nobody
+guessed. Treat the ❌ row above as "not under that name", not "not available".
 
 ---
 
@@ -226,9 +231,24 @@ and still decisive: sustained GPU load, thermals, and battery.
    not this. Remaining candidate is distributed fp32 accumulation across the
    conv stack — explainable, not fixable. Mitigation is to calibrate detection
    thresholds on-device, which is required regardless of the cause.
-2. **Why are 3 of 6 rabbit APIs missing, and why is the viewport 240×152?**
-   Both suggest the probe didn't load with full creation privileges.
-   Resolve before designing a UI against the wrong dimensions.
+2. ~~**Why is the viewport 240×152?**~~ **Answered: it isn't.** It is
+   **240×292**, identical across samples at t=0/100/500/1500/4000 ms, zero
+   resize events, not in an iframe, safe-area insets all zero. The original
+   figure came from a single sample taken at script-parse time, before the
+   WebView had settled. Docs say 282; the truth is 292, and the host reserves
+   28 px of the 320 px screen.
+
+   **Design against 240×292, but do not hardcode it.** Use relative units and
+   listen for `resize`. The 152 reading is not reproducible, which means its
+   cause is unknown rather than absent — build so that a surprise viewport
+   degrades instead of breaking.
+
+   **Still open — the rabbit API surface.** Diffing `window` against a clean
+   `about:blank` window finds **7 host-injected globals**, more than the six
+   names anyone was guessing at, and each is an object exposing `postMessage`.
+   So the surface is message-passing bridges, not direct method calls: using
+   any of them means sending a message and awaiting a reply, and needing the
+   protocol. Names not yet captured.
 3. **Offline.** A creation is fetched from its URL on *every* launch and the shell
    HTML isn't cached between loads — no network, no app. Zero of 600+ known
    creations use a service worker. Unexplored, and it matters for field birding.
