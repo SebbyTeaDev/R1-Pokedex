@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>R1 Probe</title>
+<!-- Bump on every push. GitHub Pages sends Cache-Control: max-age=600, so a
+     relaunch within 10 minutes silently serves stale HTML — which looks
+     exactly like a feature failing to appear. -->
+<meta name="build" content="b8">
+<script>window.__BUILD = "b8";</script>
 <script>
   /* Captured before this page defines any globals of its own, so anything
      here that a clean about:blank window lacks was injected by the host. */
@@ -111,6 +116,30 @@
   function yn(v) { return v ? "yes" : "no"; }
   function cls(v) { return v ? "ok" : "bad"; }
   function mb(bytes) { return (bytes / 1048576).toFixed(1) + " MB"; }
+
+  /* ---------- build / staleness ----------
+     Refetch our own HTML with cache:no-store and compare build ids. If the
+     running page is older than what the server has, say so outright instead
+     of letting a cached copy masquerade as a broken feature. */
+  (function () {
+    var r = row("s-display", "build", window.__BUILD + " (checking...)", "warn");
+    if (!window.fetch) { r.lastChild.textContent = window.__BUILD; return; }
+    fetch("./index.html?cb=" + Math.random(), { cache: "no-store" })
+      .then(function (res) { return res.text(); })
+      .then(function (html) {
+        var m = html.match(/name="build" content="([^"]+)"/);
+        var latest = m ? m[1] : "?";
+        var stale = latest !== window.__BUILD;
+        r.lastChild.textContent = stale
+          ? window.__BUILD + " STALE — latest " + latest
+          : window.__BUILD + " (current)";
+        r.lastChild.className = "v " + (stale ? "bad" : "ok");
+      })
+      .catch(function () {
+        r.lastChild.textContent = window.__BUILD + " (offline, unverified)";
+        r.lastChild.className = "v warn";
+      });
+  })();
 
   /* ---------- display ---------- */
   row("s-display", "viewport", window.innerWidth + "x" + window.innerHeight);
