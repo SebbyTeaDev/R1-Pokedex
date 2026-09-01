@@ -58,6 +58,7 @@
   <section><h2>Viewport over time</h2><div id="s-vp"></div></section>
   <section><h2>Injected globals</h2><div id="s-inj"></div></section>
   <section><h2>SDK layer</h2><div id="s-sdk"></div></section>
+  <section><h2>Offline / persistence</h2><div id="s-off"></div></section>
   <section><h2>Engine</h2><div id="s-engine"></div></section>
   <section><h2>WASM</h2><div id="s-wasm"></div></section>
   <section><h2>Graphics</h2><div id="s-gfx"></div></section>
@@ -288,6 +289,129 @@
         accelRow.lastChild.className = "v bad";
       }
     }, 6500);
+  })();
+
+  /* ---------- offline / persistence ----------
+     Two questions at once. Can a service worker install and control the page
+     (offline shell), and does anything written survive a relaunch? A creation
+     is refetched every launch, so a within-session round-trip proves the API
+     works but says nothing about whether a collection persists. Each store
+     keeps a launch counter: seeing a previous value is the proof. */
+  (function () {
+    var KEY = "r1probe_launch";
+
+    row("s-off", "navigator.onLine", yn(navigator.onLine), cls(navigator.onLine));
+
+    var ctrl = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+    row("s-off", "SW controlling", ctrl ? "yes (survived launch)" : "no (first load)",
+        ctrl ? "ok" : "warn");
+
+    var swRow = row("s-off", "SW register", "registering...", "warn");
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.register("sw.js").then(function (reg) {
+        function state() {
+          var w = reg.active ? "active" : reg.installing ? "installing"
+                : reg.waiting ? "waiting" : "none";
+          swRow.lastChild.textContent = w + " " + reg.scope.replace(location.origin, "");
+          swRow.lastChild.className = "v " + (reg.active ? "ok" : "warn");
+        }
+        state();
+        setTimeout(state, 1500);
+        setTimeout(state, 4000);
+      }).catch(function (e) {
+        swRow.lastChild.textContent = "FAILED: " + (e && e.message || e);
+        swRow.lastChild.className = "v bad";
+      });
+    } else {
+      swRow.lastChild.textContent = "unsupported";
+      swRow.lastChild.className = "v bad";
+    }
+
+    function mark(name, read, write) {
+      var r = row("s-off", name, "...", "warn");
+      Promise.resolve().then(read).then(function (prev) {
+        var n = (parseInt(prev, 10) || 0) + 1;
+        return Promise.resolve(write(String(n))).then(function () {
+          var had = prev !== null && prev !== undefined && prev !== "";
+          r.lastChild.textContent = had
+            ? "SURVIVED prev=" + prev + " now=" + n
+            : "first launch (n=1)";
+          r.lastChild.className = "v " + (had ? "ok" : "warn");
+        });
+      }).catch(function (e) {
+        r.lastChild.textContent = "err: " + (e && e.message || e);
+        r.lastChild.className = "v bad";
+      });
+    }
+
+    function idb(op, val) {
+      return new Promise(function (resolve, reject) {
+        var rq = indexedDB.open("r1probe", 1);
+        rq.onupgradeneeded = function () { rq.result.createObjectStore("kv"); };
+        rq.onerror = function () { reject(rq.error); };
+        rq.onsuccess = function () {
+          var tx = rq.result.transaction("kv", op === "get" ? "readonly" : "readwrite");
+          var st = tx.objectStore("kv");
+          var r = op === "get" ? st.get(KEY) : st.put(val, KEY);
+          r.onsuccess = function () {
+            resolve(op === "get" ? (r.result === undefined ? null : r.result) : true);
+          };
+          r.onerror = function () { reject(r.error); };
+        };
+      });
+    }
+
+    mark("localStorage",
+      function () { return localStorage.getItem(KEY); },
+      function (v) { localStorage.setItem(KEY, v); });
+
+    mark("indexedDB",
+      function () { return idb("get"); },
+      function (v) { return idb("put", v); });
+
+    mark("cacheAPI",
+      function () {
+        if (!window.caches) { throw new Error("no caches"); }
+        return caches.open("r1-probe-marker").then(function (c) {
+          return c.match(KEY).then(function (res) { return res ? res.text() : null; });
+        });
+      },
+      function (v) {
+        return caches.open("r1-probe-marker").then(function (c) {
+          return c.put(KEY, new Response(v));
+        });
+      });
+
+    /* Host-backed store. Late-injected, so wait for it. This is the one that
+       matters for the Pokedex collection. */
+    var csRow = row("s-off", "creationStorage", "waiting for SDK...", "warn");
+    var tries = 0;
+    (function waitCS() {
+      var s = window.creationStorage && window.creationStorage.plain;
+      if (s && s.getItem) {
+        Promise.resolve(s.getItem(KEY)).then(function (prev) {
+          var dec = null;
+          if (prev) { try { dec = atob(prev); } catch (e) { dec = prev; } }
+          var n = (parseInt(dec, 10) || 0) + 1;
+          return Promise.resolve(s.setItem(KEY, btoa(String(n)))).then(function () {
+            csRow.lastChild.textContent = dec
+              ? "SURVIVED prev=" + dec + " now=" + n
+              : "first launch (n=1)";
+            csRow.lastChild.className = "v " + (dec ? "ok" : "warn");
+          });
+        }).catch(function (e) {
+          csRow.lastChild.textContent = "err: " + (e && e.message || e);
+          csRow.lastChild.className = "v bad";
+        });
+        return;
+      }
+      if (++tries > 160) {
+        csRow.lastChild.textContent = "SDK never appeared";
+        csRow.lastChild.className = "v bad";
+        return;
+      }
+      setTimeout(waitCS, 50);
+    })();
   })();
 
   /* ---------- viewport over time ---------- */
