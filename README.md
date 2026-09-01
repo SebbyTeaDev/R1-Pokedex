@@ -17,7 +17,11 @@ that simple-but-lossy beats correct-but-complex wherever the two compete.
 probe/index.html      Device capability probe. Deploy this dir; open on the r1.
 bench/                BirdNET V2.4 WebGL benchmark. Fork of georg95/birdnet-web
                         with its two silent-hang bugs fixed; every await is
-                        watchdogged so a hang names its own stage.
+                        watchdogged so a hang names its own stage. Runs fully
+                        offline — SAVE FOR OFFLINE precaches the model.
+models/birdnet/       Mirrored BirdNET V2.4 weights (13 shards, 48.9 MB) +
+                        labels. Same-origin so the service worker can cache
+                        them; CC BY-NC-SA 4.0, see Model notes.
 tools/make-qr.js      Generate a creation-install QR:
                         node make-qr.js <out.svg> <title> <url> [desc] [themeColor]
 tools/qrcode.js       Vendored qrcode-generator (no CDN dependency).
@@ -319,12 +323,13 @@ and still decisive: sustained GPU load, thermals, and battery.
    observation that zero of 600+ creations use a service worker looks like
    nobody having tried rather than evidence it can't work.
 
-   **Remaining work for true field offline: the model.** It is still fetched
-   cross-origin from `georg95.github.io`, and `probe/sw.js` deliberately skips
-   cross-origin requests. Mirror the weights into this repo — same origin, so
-   the existing service worker caches them opportunistically, no third-party
-   dependency in the field, and it sets up the FP16 swap (52 MB → ~26 MB).
-   Storage quota measured 63.6 GB, so size is irrelevant.
+   **Done — the model is mirrored and offline inference works.** Weights live
+   in `models/birdnet/` (13 shards, 48.9 MB) with labels and a 3 s test clip.
+   `bench/sw.js` caches them; **SAVE FOR OFFLINE** precaches all 16 files on
+   demand so the download is a deliberate act rather than a discovery made
+   with no signal. Verified with the server stopped: shell, worker, model,
+   labels and audio all served from cache, inference completed, correct
+   species. Next optional win is the FP16 export (48.9 MB → ~26 MB).
 
 ## Constraints worth not rediscovering
 
