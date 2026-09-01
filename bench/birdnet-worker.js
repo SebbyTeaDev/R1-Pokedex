@@ -12,7 +12,12 @@
 //   * predict reads `pcmAudio` — upstream's test page sends `audioBuf`,
 //     which is the field-name mismatch that hangs it at "Inference..."
 
-importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js')
+// Vendored, not CDN. importScripts of a cross-origin URL is skipped by the
+// service worker, so a CDN tfjs makes the worker fail offline with
+// "NetworkError ... importScripts" even when everything else is cached.
+// Same-origin means the SW serves it, and there is no CDN dependency in
+// the field. Pinned to 4.22.0 (Apache-2.0).
+importScripts('./vendor/tf.min.js')
 
 // Same-origin, mirrored into this repo. Cross-origin worked, but the service
 // worker skips cross-origin requests by design, so the model could never be

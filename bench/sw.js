@@ -12,8 +12,9 @@
  * cached for field use.
  */
 
-var CACHE = 'r1-bench-v1';
-var SHELL = ['./', './index.html', './birdnet-worker.js', './test-audio.json'];
+var CACHE = 'r1-bench-v2';
+var SHELL = ['./', './index.html', './birdnet-worker.js', './vendor/tf.min.js',
+             './test-audio.json'];
 
 self.addEventListener('install', function (e) {
     e.waitUntil(

@@ -6,8 +6,8 @@
 <title>BirdNET bench</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so a relaunch
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b1">
-<script>window.__BUILD = "b1";</script>
+<meta name="build" content="b2">
+<script>window.__BUILD = "b2";</script>
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -260,7 +260,10 @@ function saveOffline() {
   var el = line('caching model...', 'hot')
 
   fetch(MODEL + 'model.json').then(function (r) { return r.json() }).then(function (m) {
-    var urls = [MODEL + 'model.json', MODEL + 'labels/en_us.txt', WAVE]
+    // tf.min.js explicitly: it is in the SW's install SHELL, but if that
+    // install ever raced or partly failed, the worker cannot even start.
+    var urls = [MODEL + 'model.json', MODEL + 'labels/en_us.txt', WAVE,
+                './vendor/tf.min.js', './birdnet-worker.js', './index.html']
     m.weightsManifest.forEach(function (g) {
       g.paths.forEach(function (p) { urls.push(MODEL + p) })
     })
