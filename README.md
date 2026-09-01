@@ -396,6 +396,15 @@ and still decisive: sustained GPU load, thermals, and battery.
   stable URL — changes are a `git push` and the same QR keeps working.
 - **Never put a site password in front of a creation.** The WebView hits the
   form with no keyboard, and same-origin worker scripts 401 behind it.
+- **A failed Pages build is invisible from the device, and looks like a broken
+  app.** The `<meta name="build">` stamp catches a STALE page but not a deploy
+  that never published: `index.html` and `version.json` are then both old and
+  agree with each other. CFG -> CHECK DEPLOY compares the published stamp
+  against repo HEAD on the GitHub API, because the repo advances even when the
+  publish does not. Run `node tools/stamp-version.js` before every commit.
+- **Keep `.nojekyll` at the repo root.** Without it Jekyll walks the whole tree
+  on every push — a 28 MB photo blob, a 49 MB model, 16 MB of YAMNet weights —
+  and Pages builds started failing outright once the repo passed ~100 MB.
 - **Ship a build stamp and check it before debugging anything.** GitHub Pages
   sends `Cache-Control: max-age=600`, so relaunching within ten minutes of a
   push serves stale HTML. That is indistinguishable from a feature failing to

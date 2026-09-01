@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b5">
-<script>window.__BUILD = "b5";</script>
+<meta name="build" content="b6">
+<script>window.__BUILD = "b6";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -738,6 +738,7 @@ function focusables() {
             { label:'ZIP CODE',  act:function(){ zipOpen(); } },
             { label:'SAVE AT',   act:function(){ cycleSave(); } },
             { label:'ANIMAL FALLBACK', act:function(){ toggleYam(); } },
+            { label:'CHECK DEPLOY', act:function(){ checkDeploy(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
   }
   if (view === 'az') {
@@ -872,6 +873,59 @@ function renderDex() {
   scrollFocusIntoView(l);
 }
 
+/* ---------- deploy check ----------
+   The build stamp in <head> catches a STALE page — one the HTTP cache is
+   still holding. It cannot catch a deploy that never published: when a Pages
+   build fails, index.html and version.json are both old and agree with each
+   other, so nothing on the device looks wrong. That happened once here, and
+   from the r1 it was indistinguishable from a broken app.
+
+   The repo advances even when the publish does not, so the check compares the
+   published stamp against HEAD on the GitHub API. Manual, not on the boot
+   path: it needs network, would be noise offline, and is a diagnostic. */
+var deployMsg = 'press to check', deployBad = false;
+
+function checkDeploy() {
+  deployMsg = 'checking...'; deployBad = false; renderCfg();
+  var pub = null;
+  fetch('data/version.json?cb=' + Math.random(), { cache:'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (v) {
+      pub = v;
+      return fetch('https://api.github.com/repos/' + v.repo + '/commits?per_page=1',
+                   { cache:'no-store' });
+    })
+    .then(function (r) {
+      if (!r.ok) { throw new Error('github ' + r.status); }
+      return r.json();
+    })
+    .then(function (commits) {
+      var head = commits && commits[0];
+      if (!head) { throw new Error('no commits'); }
+      var headAt = new Date(head.commit.committer.date).getTime();
+      var pubAt = new Date(pub.at).getTime();
+      // The stamp is written just before its own commit, so the published
+      // site is legitimately ~1 commit behind. Allow a few minutes rather
+      // than comparing SHAs, which would always differ by one.
+      var behindMs = headAt - pubAt;
+      if (behindMs > 10 * 60 * 1000) {
+        var mins = Math.round(behindMs / 60000);
+        deployMsg = pub.build + ' - ' + mins + 'm BEHIND';
+        deployBad = true;
+      } else {
+        deployMsg = pub.build + ' - current';
+        deployBad = false;
+      }
+      renderCfg();
+    })
+    .catch(function (e) {
+      // Offline is the normal case in the field, and not an error.
+      deployMsg = navigator.onLine ? 'check failed' : 'offline';
+      deployBad = false;
+      renderCfg();
+    });
+}
+
 function toggleYam() {
   yamOn = !yamOn;
   if (store) { store.set(YAM_KEY, yamOn ? '1' : '0'); }
@@ -928,6 +982,7 @@ function renderCfg() {
   var vals = ['', zip || 'not set',
               SAVE_LEVELS[saveLevel][1] + '  ' + recordMin().toFixed(2),
               yamOn ? 'ON  16MB' : 'OFF',
+              deployMsg,
               eraseCount ? (3 - eraseCount) + ' more presses'
                          : Object.keys(dex).length + ' entries'];
   l.innerHTML = '';
@@ -938,7 +993,8 @@ function renderCfg() {
     nm.className = 'nm'; nm.textContent = it.label;
     var v = document.createElement('span');
     v.className = 'rt'; v.textContent = vals[i];
-    if (i === 4 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 5 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 4 && deployBad) { v.style.color = 'var(--red-txt)'; }
     d.appendChild(nm); d.appendChild(v);
     bindRow(d, i);
     l.appendChild(d);
