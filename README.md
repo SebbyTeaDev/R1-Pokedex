@@ -102,13 +102,23 @@ than the same code costs on desktop. The earlier 5322 ms figure came from
 upstream's timer, which runs until `loaded` and so also covers the 7 MB geo
 model and 520 KB of label files.
 
-**The confidence gap is the real finding.** Same input, same weights,
-deterministic math — 0.81 desktop vs 0.69 on-device means the r1 computes at
-lower numeric precision, most likely an f16 texture fallback when the GPU has
-no float32 render target. The bench now prints `render f32` / `force f16` so
-this is testable. Consequences: top-1 ranking survives, but **confidence
-values are not portable** — any detection threshold must be calibrated on the
-device, not on desktop, or quiet birds will fall below it as false negatives.
+**The confidence gap is the real finding, and its cause is still open.** Same
+input, same weights, deterministic math — 0.81 desktop vs 0.69 on-device.
+
+- **Ruled out: f16 texture fallback.** The r1 reports `render f32 true`,
+  `force f16 false` — same as desktop. Storage precision is fine.
+- **Still open:** shader *ALU* precision and transcendental accuracy are a
+  separate axis from storage. The STFT computes twiddle factors in-shader with
+  `cos()`/`sin()` at arguments up to ~3000 rad, and GLSL ES permits mobile GPUs
+  far looser accuracy there than desktop; error compounds through every
+  butterfly stage. `bench/` now measures this directly — mantissa bits via
+  `getShaderPrecisionFormat`, plus cos error at the range the kernel uses.
+  Desktop reference (RTX 4090): highp 23b, 6.4e-7 @2π, 2.9e-4 @3000 rad.
+
+Whatever the cause, the consequence already holds: top-1 ranking survives, but
+**confidence values are not portable.** Any detection threshold must be
+calibrated on the device, not on desktop, or quiet birds fall below it as
+false negatives.
 
 **Continuous listening is back on the table.** At 3.4× realtime the GPU
 consumes audio faster than it arrives, so a rolling monitor is architecturally
@@ -123,7 +133,8 @@ and still decisive: sustained GPU load, thermals, and battery.
 1. ~~**Does the BirdNET WebGL benchmark actually run?**~~ **Answered 2026-09-01:
    882 ms/chunk, ×3.40 realtime — inference stays on-device.** See the bench
    table above. Successor question: **why is on-device confidence 0.69 vs
-   desktop 0.81?** Run `bench/` and read the `render f32` line.
+   desktop 0.81?** Not an f16 texture fallback — that's ruled out. Run
+   `bench/` and read the `shader mantissa` and `cos err` lines.
 2. **Why are 3 of 6 rabbit APIs missing, and why is the viewport 240×152?**
    Both suggest the probe didn't load with full creation privileges.
    Resolve before designing a UI against the wrong dimensions.
