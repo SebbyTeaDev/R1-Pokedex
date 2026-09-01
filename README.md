@@ -52,13 +52,49 @@ The r1 re-fetches the page every launch, so pushing updates it without re-scanni
 
 ### Rabbit API surface actually present
 
-By name: ✅ `PluginMessageHandler` · `TouchEventHandler` · `closeWebView`
-❌ `creationStorage` · `CreationVoiceHandler` · `creationSensors`
+Name-checking was the wrong method — it missed four. Diffing `window` against a
+clean `about:blank` window finds **7 host-injected globals**, measured:
 
-**But name-checking was the wrong method.** Diffing `window` against a clean
-`about:blank` window finds **7 injected globals**, each an object exposing
-`postMessage`. At least four are therefore reachable under names nobody
-guessed. Treat the ❌ row above as "not under that name", not "not available".
+```
+AccelerometerHandler   CreationStorageHandler   CreationVoiceHandler
+FlutterButtonHandler   PluginMessageHandler     TouchEventHandler
+closeWebView
+```
+
+**The surface has two layers**, which is why guessing failed. The `*Handler`
+globals are low-level Flutter bridges, each exposing only `postMessage`. The
+API you actually write against is a separate, higher-level layer that the host
+is also expected to inject — rabbit's own SDK demo
+([rabbit-hmi-oss/creations-sdk](https://github.com/rabbit-hmi-oss/creations-sdk))
+bundles no shim and calls it directly:
+
+| Bridge | Developer API |
+|---|---|
+| `CreationStorageHandler` | `window.creationStorage.plain.setItem/getItem` (base64 values) |
+| `AccelerometerHandler` | `window.creationSensors.accelerometer.start(cb, {frequency})` |
+| `FlutterButtonHandler` | **plain DOM events on `window`** — see below |
+| `PluginMessageHandler` | `.postMessage(JSON.stringify({message, useLLM, wantsR1Response}))`, reply via `window.onPluginMessage` |
+
+**Hardware input needs no wrapper and works today:**
+
+```js
+window.addEventListener('scrollUp',       fn)
+window.addEventListener('scrollDown',     fn)
+window.addEventListener('sideClick',      fn)   // PTT
+window.addEventListener('longPressStart', fn)
+window.addEventListener('longPressEnd',   fn)
+```
+
+That is the whole PTT interaction, host-dispatched, no bridge protocol needed —
+and better than touch events, which carry the `preventDefault` crash risk.
+
+**The wrapper layer did not appear in our diff.** Only the bridges did. Note
+rabbit's own demo guards with `typeof window.creationSensors === 'undefined'`,
+so absence is a state they anticipate rather than an anomaly. The probe now
+settles it by *doing* a `setItem`/`getItem` round-trip instead of checking for
+presence, and polls 6 s in case injection is late.
+
+**Docs say 240×282 throughout; the device measures 240×292. Trust the device.**
 
 ---
 
