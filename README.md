@@ -157,9 +157,36 @@ another GPU, so it measures accuracy instead of agreement. Desktop (RTX 4090):
 | in-shader `cos`/`sin` (upstream) | 8.6e-7 |
 | **lookup tables** | **6.2e-8** — the fp32 floor, 14× better |
 
-Species and timing unchanged on desktop (0.81, ~26 ms/chunk). The r1 should
-gain considerably more, since its small-argument `cos` was 37× looser than
-desktop's and that is the error the twiddle table removes.
+Species and timing unchanged on desktop (0.81, ~26 ms/chunk).
+
+**On the r1 the fix worked — and disproved its own hypothesis.** Post-fix:
+error vs exact 6.4e-7 (a few fp32 eps), checksum 2003.159 vs desktop's
+2003.160, so cross-device divergence fell from 3.2e-5 to ~5e-7, about 60×.
+**Confidence stayed at 0.69.** The STFT front-end is therefore *exonerated as
+the cause of the confidence gap* — it was a genuine numerical defect worth
+fixing, but not this symptom.
+
+Keep the LUT anyway: the kernel is now correct rather than accidentally close,
+it agrees across GPUs, and it costs nothing.
+
+### Where the confidence gap actually lives — open
+
+Ruled out, in order: f16 texture storage, fp16 ALU, loose transcendentals,
+GLSL `pow`, and now the STFT front-end. What remains is the conv stack —
+distributed fp32 accumulation differences across ~50 layers, plausibly from
+tfjs selecting different kernel paths (packing, im2col, tile sizes) under the
+r1's texture-size and capability limits. Different summation order, same
+precision.
+
+**Recommended: stop here and calibrate on-device.** The divergence is
+deterministic per device, so a threshold tuned on the r1 is exactly as good as
+knowing why. A layer-by-layer bisect (build sub-models with
+`tf.model({inputs, outputs: layer.output})` and find the first material
+divergence) would give the answer, but there is no single site left to fix —
+only an explanation.
+
+**The practical rule stands regardless: confidence values are not portable
+between desktop and device. Tune detection thresholds on the r1.**
 
 **Caveat, unproven:** 3.2e-5 at the front end producing 0.81 → 0.69 at the
 output implies ~2e4 amplification through the conv stack. Large but not
@@ -190,10 +217,11 @@ and still decisive: sustained GPU load, thermals, and battery.
 1. ~~**Does the BirdNET WebGL benchmark actually run?**~~ **Answered 2026-09-01:
    882 ms/chunk, ×3.40 realtime — inference stays on-device.** See the bench
    table above. Successor question: **why is on-device confidence 0.69 vs
-   desktop 0.81?** **Localized:** the STFT front-end diverges (checksum
-   8293.712 vs 8293.448), driven by small-argument `cos`/`sin` error compounding
-   through nine butterfly stages. Fix is a twiddle-factor lookup texture.
-   Whether that closes the full confidence gap is untested.
+   desktop 0.81?** **Still open, and deprioritized.** Five causes ruled out
+   (see the precision section); the STFT defect was real and is fixed, but was
+   not this. Remaining candidate is distributed fp32 accumulation across the
+   conv stack — explainable, not fixable. Mitigation is to calibrate detection
+   thresholds on-device, which is required regardless of the cause.
 2. **Why are 3 of 6 rabbit APIs missing, and why is the viewport 240×152?**
    Both suggest the probe didn't load with full creation privileges.
    Resolve before designing a UI against the wrong dimensions.
