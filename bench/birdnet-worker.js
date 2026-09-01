@@ -44,6 +44,46 @@ async function main() {
         downloadF32: flag('WEBGL_DOWNLOAD_FLOAT_ENABLED')
     })
 
+    // Storage precision (the flags above) and ALU precision are different
+    // axes. getShaderPrecisionFormat reports mantissa bits the fragment
+    // shader actually computes with: 23 = fp32, 10 = fp16. And GLSL ES lets
+    // mobile GPUs be far looser on cos/sin than desktop — which is where the
+    // STFT's per-invocation twiddle factors live, at args up to ~3000 rad.
+    var gl = null
+    try { gl = tf.backend().gpgpu.gl } catch (e) { gl = null }
+    function prec(type) {
+        try {
+            var p = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl[type])
+            return p ? p.precision : -1
+        } catch (e) { return -1 }
+    }
+    var renderer = ''
+    try {
+        var ext = gl.getExtension('WEBGL_debug_renderer_info')
+        renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''
+    } catch (e) { renderer = '' }
+
+    // Replicate the kernel's stress case: cos over the same argument range.
+    async function cosError(maxArg) {
+        var xs = new Float32Array(2048)
+        for (var i = 0; i < xs.length; i++) { xs[i] = (i / xs.length) * maxArg }
+        var got = await tf.cos(tf.tensor1d(xs)).data()
+        var worst = 0
+        for (var j = 0; j < xs.length; j++) {
+            var e = Math.abs(got[j] - Math.cos(xs[j]))
+            if (e > worst) { worst = e }
+        }
+        return worst
+    }
+    postMessage({
+        message: 'precision',
+        renderer: renderer,
+        highp: prec('HIGH_FLOAT'),
+        mediump: prec('MEDIUM_FLOAT'),
+        cosErrSmall: await cosError(6.283185307179586),
+        cosErrLarge: await cosError(3000)
+    })
+
     t = performance.now()
     var labels = (await fetch(BASE + 'labels/en_us.txt').then(function (r) {
         if (!r.ok) { throw new Error('labels ' + r.status + ' from ' + r.url) }

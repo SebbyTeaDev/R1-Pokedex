@@ -120,6 +120,19 @@ function bench() {
       line('  -> render f32 ' + d.renderF32 + ', force f16 ' + d.forceF16,
            d.renderF32 === 'true' ? 'dim' : 'err')
       line('  -> download f32 ' + d.downloadF32, 'dim')
+      return expect('precision', 'gpu precision probe', 60000)
+    })
+    .then(function (d) {
+      if (d.renderer) { line('  -> ' + d.renderer, 'dim') }
+      // 23 mantissa bits = fp32 ALU, 10 = fp16. Desktop reference below is an
+      // RTX 4090; cos error at 3000 rad is range-reduction loss that even a
+      // desktop GPU shows, so only a much larger value is a real signal.
+      line('  -> shader mantissa: highp ' + d.highp + 'b, mediump ' + d.mediump + 'b'
+           + '  (ref 23b)', d.highp >= 23 ? 'dim' : 'err')
+      line('  -> cos err ' + d.cosErrSmall.toExponential(1) + ' @2pi (ref 6.4e-7)',
+           d.cosErrSmall > 1e-4 ? 'err' : 'dim')
+      line('  -> cos err ' + d.cosErrLarge.toExponential(1) + ' @3000rad (ref 2.9e-4)',
+           d.cosErrLarge > 1e-2 ? 'err' : 'dim')
       return step('labels', 'labels', 'label list fetch', 60000)
     })
     .then(function (d) {
