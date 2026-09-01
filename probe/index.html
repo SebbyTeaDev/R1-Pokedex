@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>R1 Probe</title>
+<script>
+  /* Captured before this page defines any globals of its own, so anything
+     here that a clean about:blank window lacks was injected by the host. */
+  window.__atStart = Object.getOwnPropertyNames(window);
+</script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -50,6 +55,8 @@
   <h1>R1 Probe</h1>
 
   <section><h2>Display</h2><div id="s-display"></div></section>
+  <section><h2>Viewport over time</h2><div id="s-vp"></div></section>
+  <section><h2>Injected globals</h2><div id="s-inj"></div></section>
   <section><h2>Engine</h2><div id="s-engine"></div></section>
   <section><h2>WASM</h2><div id="s-wasm"></div></section>
   <section><h2>Graphics</h2><div id="s-gfx"></div></section>
@@ -163,6 +170,132 @@
   ].forEach(function (p) {
     row("s-rabbit", p[0], yn(!!p[1]), cls(!!p[1]));
   });
+
+  /* Re-check by name over time. A WebView can attach interfaces after the
+     first script runs, in which case a one-shot check reports them absent. */
+  (function () {
+    var names = ["PluginMessageHandler", "CreationVoiceHandler", "creationStorage",
+                 "creationSensors", "TouchEventHandler", "closeWebView"];
+    var late = row("s-rabbit", "late arrivals", "watching...", "warn");
+    function recheck(ms) {
+      var found = names.filter(function (n) { return !!window[n]; });
+      late.lastChild.textContent = "@" + ms + "ms: " + found.length + "/" + names.length;
+      late.lastChild.className = "v " + (found.length === names.length ? "ok" : "warn");
+    }
+    [500, 2000, 5000].forEach(function (ms) {
+      setTimeout(function () { recheck(ms); }, ms);
+    });
+  })();
+
+  /* ---------- viewport over time ---------- */
+  (function () {
+    var inIframe = false;
+    try { inIframe = window.top !== window.self; } catch (e) { inIframe = true; }
+    row("s-vp", "in iframe", yn(inIframe), inIframe ? "bad" : "ok");
+    row("s-vp", "screen avail", screen.availWidth + "x" + screen.availHeight);
+    try {
+      row("s-vp", "orientation", (screen.orientation && screen.orientation.type) || "n/a");
+    } catch (e) {}
+
+    /* If the host reserves chrome (status bar, nav), it shows up as inset. */
+    var pad = document.createElement("div");
+    pad.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;" +
+      "padding:env(safe-area-inset-top) env(safe-area-inset-right) " +
+      "env(safe-area-inset-bottom) env(safe-area-inset-left);";
+    document.body.appendChild(pad);
+    var cs = getComputedStyle(pad);
+    row("s-vp", "safe-area trbl",
+        [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].join(" "));
+
+    function snap() {
+      var vv = window.visualViewport;
+      return window.innerWidth + "x" + window.innerHeight +
+             " doc" + document.documentElement.clientWidth + "x" +
+             document.documentElement.clientHeight +
+             (vv ? " vv" + Math.round(vv.width) + "x" + Math.round(vv.height) : "");
+    }
+    var prev = null;
+    function sample(label) {
+      var s = snap();
+      row("s-vp", label, s, prev !== null && s !== prev ? "warn" : "");
+      prev = s;
+    }
+    sample("t=0");
+    [100, 500, 1500, 4000].forEach(function (ms) {
+      setTimeout(function () { sample("t=" + ms); }, ms);
+    });
+
+    var n = 0;
+    var rz = row("s-vp", "resizes", "0");
+    function onResize() {
+      n++;
+      rz.lastChild.textContent = n + " -> " + snap();
+      rz.lastChild.className = "v warn";
+    }
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", onResize);
+    }
+  })();
+
+  /* ---------- injected globals ---------- */
+  /* Diff window against a clean about:blank window. Anything present here and
+     absent there was put there by the host — which finds the rabbit API
+     surface by observation instead of by guessing at names. */
+  (function () {
+    var base = {};
+    try {
+      var f = document.createElement("iframe");
+      f.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
+      document.body.appendChild(f);
+      Object.getOwnPropertyNames(f.contentWindow).forEach(function (k) { base[k] = 1; });
+      document.body.removeChild(f);
+    } catch (e) {
+      row("s-inj", "baseline", "unavailable: " + e.message, "bad");
+      return;
+    }
+
+    var injected = (window.__atStart || []).filter(function (k) {
+      return !base[k] && k !== "__atStart";
+    });
+    row("s-inj", "host-injected", String(injected.length), injected.length ? "ok" : "bad");
+    injected.slice(0, 40).forEach(function (k) {
+      var detail;
+      try {
+        var v = window[k];
+        detail = typeof v;
+        if (detail === "object" && v) {
+          var keys = [];
+          for (var p in v) { keys.push(p); if (keys.length >= 8) { break; } }
+          detail = "{" + keys.join(",") + "}";
+        }
+      } catch (e) { detail = "err"; }
+      row("s-inj", k, detail, "ok");
+    });
+    if (injected.length > 40) {
+      row("s-inj", "...", "+" + (injected.length - 40) + " more", "warn");
+    }
+
+    /* Anything appearing after our own script finishes is a late injection. */
+    var settled = null;
+    setTimeout(function () {
+      settled = {};
+      Object.getOwnPropertyNames(window).forEach(function (k) { settled[k] = 1; });
+    }, 0);
+    [1000, 3000, 6000].forEach(function (ms) {
+      setTimeout(function () {
+        if (!settled) { return; }
+        var fresh = Object.getOwnPropertyNames(window).filter(function (k) {
+          return !settled[k];
+        });
+        fresh.forEach(function (k) {
+          settled[k] = 1;
+          row("s-inj", "late@" + ms + " " + k, typeof window[k], "warn");
+        });
+      }, ms);
+    });
+  })();
 
   /* ---------- cpu benchmark ---------- */
   function matmul(n, iters) {
