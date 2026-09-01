@@ -5,6 +5,10 @@ A Pokédex-style bird & animal identifier for the **rabbit r1**, built as a
 
 Audio ID via **BirdNET**; photo ID via a vision model over BYOK.
 
+**Scope: personal, non-commercial, for fun.** This is a settled constraint, not
+a placeholder — it means BirdNET V2.4 (CC BY-NC-SA) is fine to build on, and
+that simple-but-lossy beats correct-but-complex wherever the two compete.
+
 ---
 
 ## Layout
