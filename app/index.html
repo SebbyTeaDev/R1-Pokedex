@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="b3">
-<script>window.__BUILD = "b3";</script>
+<meta name="build" content="b4">
+<script>window.__BUILD = "b4";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -105,7 +105,7 @@
 
   /* ---- result ---- */
   #resWrap { flex:1; min-height:0; overflow:hidden; padding:5px; }
-  #photo { float:left; position:relative; width:56px; height:56px; margin:0 6px 3px 0;
+  #photo { float:left; position:relative; width:84px; height:84px; margin:0 7px 3px 0;
            border-radius:2px; background:var(--sunk); border:1px solid var(--line-hi);
            display:flex; align-items:center; justify-content:center;
            font-size:8px; color:var(--ink3); overflow:hidden; }
@@ -114,9 +114,20 @@
   #photoImg.on + #photoTxt { display:none; }
   /* ~93% of these images legally require attribution, so the credit ships
      with them and is rendered, not stored and forgotten. */
+  /* Tap the photo to fill the screen; tap again to dismiss. On a 240px panel
+     an 84px thumbnail is the most detail that fits beside the text, so the
+     full-screen view is where the bird is actually looked at. */
+  #shot { display:none; position:fixed; inset:0; z-index:20; background:#000;
+          align-items:center; justify-content:center; flex-direction:column; }
+  #shot.on { display:flex; }
+  #shotImg { width:100%; height:auto; max-height:82%; object-fit:contain;
+             image-rendering:auto; }
+  #shotCap { margin-top:6px; font-size:9px; color:var(--ink2); text-align:center;
+             padding:0 6px; }
+  #shotHint { margin-top:3px; font-size:8px; color:var(--ink3); }
   #credit { font-size:8px; color:var(--ink3); margin-top:3px;
             overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .thumb { flex:0 0 auto; width:18px; height:18px; border-radius:2px;
+  .thumb { flex:0 0 auto; width:26px; height:26px; border-radius:2px;
            object-fit:cover; background:var(--sunk); }
   .chip { display:inline-block; font-size:9px; font-weight:bold; padding:1px 5px;
           border-radius:3px; letter-spacing:.06em; color:#0D0D0F; margin:0 3px 2px 0; }
@@ -154,6 +165,31 @@
   .tx.amphibian{color:var(--blue)} .tx.insect{color:var(--violet)} .tx.mammal{color:var(--amber)}
   .hint { padding:14px 8px; text-align:center; font-size:10px; color:var(--ink3);
           white-space:pre-line; }
+
+  /* ---- A-Z grid ----
+     Letter buckets are wildly uneven (B=914, Z=16), so a flat A-Z index is
+     useless alone; letters over 48 entries open a chunk list first. */
+  #azGrid { flex:1; min-height:0; overflow-y:auto; padding:6px 5px;
+            display:flex; flex-wrap:wrap; gap:4px; align-content:flex-start; }
+  .az { width:30px; height:26px; display:flex; align-items:center;
+        justify-content:center; font-size:12px; background:var(--panel);
+        border:1px solid var(--line); border-radius:2px; color:var(--ink2); }
+  .az.sel { background:var(--amber); color:#0D0D0F; font-weight:bold;
+            border-color:var(--amber); }
+  .az.back { width:auto; padding:0 8px; font-size:10px; }
+  #azInfo { width:100%; padding:4px 1px 0; font-size:9px; color:var(--ink3); }
+
+  /* ---- entry page ---- */
+  #entryWrap { flex:1; min-height:0; overflow-y:auto; padding:6px; text-align:center; }
+  #eImg { width:96px; height:96px; border-radius:2px; object-fit:cover;
+          background:var(--sunk); border:1px solid var(--line-hi); }
+  #eCommon { margin-top:5px; font-size:15px; color:#fff; overflow-wrap:anywhere; }
+  #eSci { font-size:9px; color:var(--ink3); font-style:italic; }
+  .eRow { display:flex; gap:6px; font-size:9px; padding:2px 0;
+          border-bottom:1px solid #1B1B20; text-align:left; }
+  .eRow b { flex:0 0 52px; color:var(--ink3); font-weight:normal; }
+  .eRow span { flex:1 1 auto; text-align:right; overflow:hidden;
+               white-space:nowrap; text-overflow:ellipsis; }
 
   /* ---- zip reel ---- */
   #zipDigits { margin-top:8px; font-size:22px; letter-spacing:4px; }
@@ -221,6 +257,10 @@
   </div>
 
   <div id="v-dex" class="view"><div id="dexList" class="list"></div></div>
+  <div id="v-dexmenu" class="view"><div id="menuList" class="list"></div></div>
+  <div id="v-az" class="view"><div id="azGrid"></div></div>
+  <div id="v-brow" class="view"><div id="browList" class="list"></div></div>
+  <div id="v-entry" class="view"><div id="entryWrap"></div></div>
   <div id="v-cfg" class="view"><div id="cfgList" class="list"></div></div>
 
   <div id="v-zip" class="view">
@@ -233,6 +273,11 @@
   </div>
 
   <div id="rail"></div>
+</div>
+<div id="shot">
+  <img id="shotImg" alt="">
+  <div id="shotCap"></div>
+  <div id="shotHint">tap or PTT to close</div>
 </div>
 
 <script>
@@ -293,6 +338,8 @@ function bandOf(c) {
 
 var el = function (id) { return document.getElementById(id); };
 var worker = null, ready = false, busy = false, lastTrigger = 0, lastCommit = 0;
+var yam = null, yamOn = true, pendingPcm = null, birdVerdict = null;
+var YAM_KEY = 'pokedex_yam';
 var dex = {}, store = null, zip = null, nearby = null;
 var TAXA = {}, ZIP3 = {};
 var view = 'boot', focus = 0;
@@ -501,6 +548,10 @@ function identify() {
   capture(function (f) { el('count').textContent = (3 - f * 3).toFixed(1); })
     .then(function (pcm) {
       el('count').textContent = '--'; el('capMsg').textContent = 'ANALYSING';
+      // Keep a copy: BirdNET answers first, and YAMNet is only asked when it
+      // has nothing. Transferring the buffer would leave nothing to ask with.
+      pendingPcm = yamOn ? pcm.slice() : null;
+      birdVerdict = null;
       worker.postMessage({ message:'identify', pcm:pcm }, [pcm.buffer]);
     })
     .catch(function (e) {
@@ -527,8 +578,21 @@ function showPlain(t, head, sub) {
 }
 
 function showResult(d) {
-  busy = false; leds(0, 0, 1);
   var top = d.top || [];
+  /* BirdNET is authoritative for wild species. YAMNet is asked ONLY when
+     BirdNET has nothing, because YAMNet's best bird answer is the word "Bird"
+     while BirdNET names the species — but YAMNet knows dogs, cats, horses and
+     livestock, which BirdNET has no classes for at all. */
+  var weak = !top.length || top[0].confidence < SHOW_MIN || top[0].noise;
+  if (weak && yamOn && pendingPcm && yam) {
+    birdVerdict = d;
+    el('capMsg').textContent = 'CHECKING ANIMALS';
+    yam.postMessage({ message:'classify', pcm:pendingPcm }, [pendingPcm.buffer]);
+    pendingPcm = null;
+    return;
+  }
+  pendingPcm = null;
+  busy = false; leds(0, 0, 1);
   show('res'); clearCard();
 
   if (!top.length || top[0].confidence < SHOW_MIN) {
@@ -587,6 +651,40 @@ function showResult(d) {
     return x.common + '  ' + x.confidence.toFixed(2); }).join('\n');
 }
 
+
+/* A YAMNet answer is a coarse creature ("Dog"), not a species, so it is shown
+   plainly as that and never written to the collection — a Pokedex entry of
+   "Dog" alongside 6511 named species would be a category error. */
+function showYam(d) {
+  busy = false; leds(0, 0, 1);
+  show('res'); clearCard();
+  var top = (d.top || []).filter(function (t) { return t.taxon !== 'bird'; });
+  if (!top.length || top[0].confidence < 0.20) {
+    var b = birdVerdict && birdVerdict.top && birdVerdict.top[0];
+    title('NO SIGNAL');
+    el('photoTxt').textContent = '--';
+    el('common').textContent = 'NO SIGNAL';
+    el('sci').textContent = b ? 'closest was ' + b.common : 'nothing heard';
+    birdVerdict = null;
+    return;
+  }
+  var t = top[0];
+  title('ANIMAL');
+  el('photoTxt').textContent = '?';
+  addChip(t.taxon.toUpperCase(), t.taxon === 'bird' ? 'warn' : t.taxon);
+  addChip('NOT A SPECIES', 'warn');
+  var bd = bandOf(t.confidence);
+  el('band4').textContent = bd ? bd.label : '';
+  el('band4').className = bd ? bd.cls : '';
+  el('confFill').style.width = Math.round(t.confidence * 100) + '%';
+  el('confTxt').textContent = t.confidence.toFixed(2) + '  ' + Math.round(d.ms) + 'ms';
+  el('common').textContent = t.name;
+  el('sci').textContent = 'general sound, not identified to species';
+  el('alts').textContent = top.slice(1).map(function (x) {
+    return x.name + '  ' + x.confidence.toFixed(2); }).join('\n');
+  birdVerdict = null;
+}
+
 function addChip(text, cls) {
   var s = document.createElement('span');
   s.className = 'chip ' + cls; s.textContent = text;
@@ -596,10 +694,10 @@ function addChip(text, cls) {
 /* ---------- views + focus ---------- */
 var RAILS = {
   home: [['SCAN', function(){ identify(); }],
-         ['DEX',  function(){ show('dex'); }],
+         ['DEX',  function(){ show('dexmenu'); }],
          ['CFG',  function(){ show('cfg'); }]],
   res:  [['SCAN', function(){ identify(); }],
-         ['DEX',  function(){ show('dex'); }],
+         ['DEX',  function(){ show('dexmenu'); }],
          ['HOME', function(){ show('home'); }]]
 };
 
@@ -614,27 +712,55 @@ function focusables() {
     return RAILS[view].map(function (r) { return { label:r[0], act:r[1] }; });
   }
   if (view === 'dex') {
-    var out = [{ label:'< BACK', act:function(){ show('home'); } }];
-    dexKeys().forEach(function () { out.push({ label:'', act:function(){} }); });
+    var out = [{ label:'< BACK', act:function(){ show('dexmenu'); } }];
+    dexKeys().forEach(function (k) {
+      out.push({ label:dex[k].common, act:function(){ openEntry(k, 'dex'); } });
+    });
     return out;
   }
   if (view === 'cfg') {
     return [{ label:'< BACK',    act:function(){ show('home'); } },
             { label:'ZIP CODE',  act:function(){ zipOpen(); } },
             { label:'SAVE AT',   act:function(){ cycleSave(); } },
+            { label:'ANIMAL FALLBACK', act:function(){ toggleYam(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
+  }
+  if (view === 'az') {
+    var out = [{ label:'< BACK', act:function(){ show('dexmenu'); } }];
+    azLetters.forEach(function (ch) {
+      out.push({ label:ch, act:function(){ openLetter(ch); } });
+    });
+    return out;
+  }
+  if (view === 'brow') { return browItems(); }
+  if (view === 'entry') {
+    return [{ label:'< BACK', act:function(){ show(entryFrom); } }];
+  }
+  if (view === 'dexmenu') {
+    return [
+      { label:'< BACK', act:function(){ show('home'); } },
+      { label:'CAUGHT', right:String(Object.keys(dex).length),
+        act:function(){ show('dex'); } },
+      { label:'NEARBY', right:nearby ? String(nearby.length) : 'set ZIP',
+        act:function(){ if (nearby) { openNearby(); } } },
+      { label:'ALL SPECIES', right:'6511', act:function(){ azOpen(); } }
+    ];
   }
   return [];
 }
 
 function show(name) {
   view = name; focus = 0;
-  ['boot','home','cap','res','dex','cfg','zip'].forEach(function (v) {
+  ['boot','home','cap','res','dex','dexmenu','az','brow','entry','cfg','zip'].forEach(function (v) {
     el('v-' + v).className = 'view' + (v === name ? ' on' : '');
   });
   if (name === 'home') { title('POKEDEX'); renderHome(); }
   else if (name === 'dex') { renderDex(); }
   else if (name === 'cfg') { title('CONFIG'); renderCfg(); }
+  else if (name === 'dexmenu') { title('DEX'); renderMenu(); }
+  else if (name === 'az') { renderAZ(); }
+  else if (name === 'brow') { renderBrow(); }
+  else if (name === 'entry') { renderEntry(); }
   else if (name === 'zip') { title('ZIP CODE'); }
   renderRail();
 }
@@ -730,6 +856,13 @@ function renderDex() {
   scrollFocusIntoView(l);
 }
 
+function toggleYam() {
+  yamOn = !yamOn;
+  if (store) { store.set(YAM_KEY, yamOn ? '1' : '0'); }
+  if (yamOn && !yam) { bootYam(); }
+  renderCfg();
+}
+
 function cycleSave() {
   saveLevel = (saveLevel + 1) % SAVE_LEVELS.length;
   if (store) { store.set(SAVE_KEY, String(saveLevel)); }
@@ -747,10 +880,38 @@ function eraseArm() {
   renderCfg();
 }
 
+function renderMenu() {
+  var l = el('menuList'), items = focusables();
+  l.innerHTML = '';
+  items.forEach(function (it, i) {
+    var d = document.createElement('div');
+    d.className = 'row' + (i === focus ? ' sel' : '');
+    var nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = it.label;
+    d.appendChild(nm);
+    if (it.right) {
+      var r = document.createElement('span');
+      r.className = 'rt'; r.textContent = it.right;
+      d.appendChild(r);
+    }
+    bindRow(d, i);
+    l.appendChild(d);
+  });
+  // Two meters deliberately: 6511 reads ~0% forever and is demoralising on its
+  // own; the nearby number is the achievable one and the actual game.
+  var m = document.createElement('div');
+  m.className = 'hint';
+  m.textContent = 'caught ' + Object.keys(dex).length + ' of 6511' +
+    (nearby ? '\n' + countSeenNearby() + ' of ' + nearby.length + ' nearby this week' : '');
+  l.appendChild(m);
+  scrollFocusIntoView(l);
+}
+
 function renderCfg() {
   var l = el('cfgList'), items = focusables();
   var vals = ['', zip || 'not set',
               SAVE_LEVELS[saveLevel][1] + '  ' + recordMin().toFixed(2),
+              yamOn ? 'ON  16MB' : 'OFF',
               eraseCount ? (3 - eraseCount) + ' more presses'
                          : Object.keys(dex).length + ' entries'];
   l.innerHTML = '';
@@ -761,7 +922,7 @@ function renderCfg() {
     nm.className = 'nm'; nm.textContent = it.label;
     var v = document.createElement('span');
     v.className = 'rt'; v.textContent = vals[i];
-    if (i === 3 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 4 && eraseCount) { v.style.color = 'var(--red-txt)'; }
     d.appendChild(nm); d.appendChild(v);
     bindRow(d, i);
     l.appendChild(d);
@@ -793,7 +954,206 @@ function scrollFocusIntoView(l) {
 function rerender() {
   if (view === 'dex') { renderDex(); }
   else if (view === 'cfg') { renderCfg(); }
+  else if (view === 'dexmenu') { renderMenu(); }
+  else if (view === 'az') { renderAZ(); }
+  else if (view === 'brow') { renderBrow(); }
+  else if (view === 'entry') { renderEntry(); }
   else { renderRail(); }
+}
+
+/* ---------- species browser ----------
+   6511 entries on one wheel and one button. Reaching an arbitrary species is
+   ~45 clicks worst case and no interaction model fixes that with a single
+   axis, which is why ALL SPECIES sits last and NEARBY is the real product.
+   Letter buckets are very uneven (B=914, Z=16), so anything over 48 opens a
+   chunk list before the leaf list. */
+var SPECIES = null;
+var azLetters = [], browMode = 'chunk', browLetter = '', browRange = null;
+var entrySci = null, entryFrom = 'dex';
+
+function browItems() {
+  var out = [{ label:'< BACK', act:function(){ show(browMode === 'nearby' ? 'dexmenu' : 'az'); } }];
+  if (!SPECIES) { return out; }
+
+  if (browMode === 'chunk') {
+    SPECIES.ch[browLetter].forEach(function (c) {
+      out.push({ label:c[2] + ' - ' + c[3], right:String(c[1]),
+        act:function(){ browMode = 'leaf'; browRange = [c[0], c[1]]; focus = 0; renderBrow(); } });
+    });
+    return out;
+  }
+  if (browMode === 'nearby') {
+    nearby.forEach(function (n) {
+      var seen = !!dex[n.sci];
+      var r = rarityOf(n.score);
+      out.push({ label:n.common, sci:n.sci, seen:seen,
+        right:seen ? 'SEEN' : (r ? pips(r.pips) : ''),
+        act:function(){ openEntry(n.sci, 'brow'); } });
+    });
+    return out;
+  }
+  for (var i = browRange[0]; i < browRange[0] + browRange[1]; i++) {
+    (function (rec) {
+      var seen = !!dex[rec[1]];
+      out.push({ label:rec[0], sci:rec[1], seen:seen, right:seen ? 'SEEN' : '',
+        act:function(){ openEntry(rec[1], 'brow'); } });
+    })(SPECIES.n[i]);
+  }
+  return out;
+}
+
+function openNearby() {
+  loadSpecies(function () {
+    browMode = 'nearby'; browLetter = 'NEARBY'; browRange = [0, nearby.length];
+    show('brow');
+  });
+}
+
+function loadSpecies(then) {
+  if (SPECIES) { then(); return; }
+  title('LOADING...');
+  fetch('data/species.json').then(function (r) { return r.json(); })
+    .then(function (d) { SPECIES = d; then(); })
+    .catch(function () { title('INDEX FAILED'); });
+}
+
+function azOpen() {
+  loadSpecies(function () { azLetters = Object.keys(SPECIES.az); show('az'); });
+}
+
+function renderAZ() {
+  var g = el('azGrid');
+  g.innerHTML = '';
+  title('ALL 6511');
+  var back = document.createElement('div');
+  back.className = 'az back' + (focus === 0 ? ' sel' : '');
+  back.textContent = '< BACK';
+  bindRow(back, 0);
+  g.appendChild(back);
+  azLetters.forEach(function (ch, i) {
+    var d = document.createElement('div');
+    d.className = 'az' + (focus === i + 1 ? ' sel' : '');
+    d.textContent = ch;
+    bindRow(d, i + 1);
+    g.appendChild(d);
+  });
+  var sel = azLetters[focus - 1];
+  var info = document.createElement('div');
+  info.id = 'azInfo';
+  info.textContent = sel ? sel + '  ' + SPECIES.az[sel][1] + ' species'
+                         : 'wheel to a letter, PTT to open';
+  g.appendChild(info);
+}
+
+function openLetter(ch) {
+  browLetter = ch;
+  if (SPECIES.ch[ch]) { browMode = 'chunk'; browRange = null; }
+  else { browMode = 'leaf'; browRange = SPECIES.az[ch].slice(); }
+  show('brow');
+}
+
+function renderBrow() {
+  var l = el('browList');
+  l.innerHTML = '';
+  var items = focusables();
+  items.forEach(function (it, i) {
+    var d = document.createElement('div');
+    d.className = 'row' + (i === focus ? ' sel' : '');
+    if (it.sci) {
+      var url = photoURL(it.sci);
+      if (url) {
+        var im = document.createElement('img');
+        im.className = 'thumb'; im.src = url; im.alt = '';
+        if (!dex[it.sci]) { im.style.filter = 'grayscale(1) brightness(.35)'; }
+        d.appendChild(im);
+      }
+    }
+    var nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = it.label;
+    if (it.sci && !dex[it.sci]) { nm.style.color = 'var(--ink3)'; }
+    d.appendChild(nm);
+    if (it.right) {
+      var r = document.createElement('span');
+      r.className = 'rt'; r.textContent = it.right;
+      if (it.seen) { r.style.color = 'var(--green)'; }
+      d.appendChild(r);
+    }
+    bindRow(d, i);
+    l.appendChild(d);
+  });
+  title(browMode === 'nearby' ? 'NEARBY ' + nearby.length
+        : browMode === 'chunk' ? browLetter + ' ' + SPECIES.az[browLetter][1]
+        : browLetter + ' ' + browRange[1]);
+  scrollFocusIntoView(l);
+}
+
+function openEntry(sci, from) {
+  entrySci = sci; entryFrom = from || 'brow'; show('entry');
+}
+
+function commonOf(sci) {
+  if (dex[sci]) { return dex[sci].common; }
+  if (SPECIES) {
+    for (var i = 0; i < SPECIES.n.length; i++) {
+      if (SPECIES.n[i][1] === sci) { return SPECIES.n[i][0]; }
+    }
+  }
+  return sci;
+}
+
+/* Rarity for any species, not just caught ones: read it off the NEARBY list
+   the worker already computed. A species absent from a populated list is
+   off-range, which is different from "we have no ZIP". */
+function geoFor(sci) {
+  if (dex[sci] && dex[sci].geo !== undefined && dex[sci].geo !== null) { return dex[sci].geo; }
+  if (!nearby) { return null; }
+  for (var i = 0; i < nearby.length; i++) {
+    if (nearby[i].sci === sci) { return nearby[i].score; }
+  }
+  return -1;
+}
+
+function renderEntry() {
+  var w = el('entryWrap'), sci = entrySci, e = dex[sci];
+  w.innerHTML = '';
+  title(e ? 'SEEN' : 'NOT SEEN');
+
+  var img = document.createElement('img');
+  img.id = 'eImg'; img.alt = '';
+  var url = photoURL(sci);
+  if (url) { img.src = url; }
+  // Unseen species render dim — the Pokedex silhouette idiom, arrived at from
+  // a constraint rather than added as decoration.
+  if (!e) { img.style.filter = 'grayscale(1) brightness(.35)'; }
+  img.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); openShot(sci); });
+  w.appendChild(img);
+
+  var c = document.createElement('div'); c.id = 'eCommon'; c.textContent = commonOf(sci);
+  var sc = document.createElement('div'); sc.id = 'eSci'; sc.textContent = sci;
+  w.appendChild(c); w.appendChild(sc);
+
+  function row(k, v, col) {
+    var d = document.createElement('div'); d.className = 'eRow';
+    var b = document.createElement('b'); b.textContent = k;
+    var s2 = document.createElement('span'); s2.textContent = v;
+    if (col) { s2.style.color = col; }
+    d.appendChild(b); d.appendChild(s2); w.appendChild(d);
+  }
+  var tax = taxonOf(sci);
+  row('GROUP', tax.toUpperCase(), tax === 'bird' ? '' : 'var(--blue)');
+  if (e) {
+    row('HEARD', e.count + (e.count === 1 ? ' time' : ' times'));
+    row('BEST', e.best.toFixed(2));
+    row('FIRST', new Date(e.first).toLocaleDateString());
+    row('LAST', new Date(e.last).toLocaleDateString());
+  } else {
+    row('HEARD', 'never', 'var(--ink3)');
+  }
+  var r = rarityOf(geoFor(sci));
+  if (r) { row('RARITY', r.label + ' ' + pips(r.pips), r.anomaly ? 'var(--red-txt)' : ''); }
+  else { row('RARITY', 'set ZIP', 'var(--ink3)'); }
+  var cr = credits && credits.by[sci];
+  if (cr) { row('PHOTO', cr[0] + ' / ' + credits.lic[cr[1]]); }
 }
 
 /* ---------- zip reel ----------
@@ -902,6 +1262,27 @@ function setPhoto(sci) {
   el('credit').textContent = c ? (c[0] + ' / ' + credits.lic[c[1]]) : '';
 }
 
+/* Full-screen photo. The 80px source is upscaled — it is what we bundled, and
+   9 MB for the set was the trade — so let the browser smooth it rather than
+   showing hard pixel edges at 3x. */
+var shotOpen = false;
+function openShot(sci) {
+  var url = photoURL(sci);
+  if (!url) { return; }
+  var e = dex[sci];
+  el('shotImg').src = url;
+  var c = credits && credits.by[sci];
+  el('shotCap').textContent = commonOf(sci) +
+    (c ? '\n' + c[0] + ' / ' + credits.lic[c[1]] : '');
+  el('shotCap').style.whiteSpace = 'pre-line';
+  el('shot').className = 'on';
+  shotOpen = true;
+}
+function closeShot() {
+  el('shot').className = '';
+  shotOpen = false;
+}
+
 // The pack can land after a card is already on screen.
 var lastShownSci = null;
 function rerenderPhotos() {
@@ -935,7 +1316,8 @@ function boot() {
     }
     if (d.message === 'warmup') { el('bootSub').textContent = 'warming up'; leds(0, 1, 0); return; }
     if (d.message === 'ready') {
-      ready = true; leds(0, 0, 1); show('home'); requestGeo(); loadPhotos(); return;
+      ready = true; leds(0, 0, 1); show('home'); requestGeo(); loadPhotos();
+      bootYam(); return;
     }
     if (d.message === 'geo_loading') { title('RANGE...'); return; }
     if (d.message === 'geo') {
@@ -952,6 +1334,25 @@ function boot() {
   });
 }
 
+function bootYam() {
+  if (!yamOn) { return; }
+  try { yam = new Worker('yamnet.js'); } catch (e) { yam = null; return; }
+  yam.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (d.message === 'yam') { showYam(d); return; }
+    if (d.message === 'error') {
+      // A YAMNet failure must never strand a capture: fall back to whatever
+      // BirdNET said, even if that was "nothing".
+      if (birdVerdict) { var v = birdVerdict; birdVerdict = null; yamOn = false; showResult(v); }
+      return;
+    }
+  });
+  yam.addEventListener('error', function () {
+    yamOn = false;
+    if (birdVerdict) { var v = birdVerdict; birdVerdict = null; showResult(v); }
+  });
+}
+
 /* ---------- input ----------
    Host-dispatched DOM events only. No touch handlers anywhere: preventDefault
    on a touch event crashes this WebView about 3 s later. */
@@ -960,6 +1361,9 @@ function boot() {
    rather than what the cursor happened to be on. */
 function activate(idx) {
   var now = Date.now();
+  // The overlay swallows the next commit, so PTT closes it rather than
+  // firing whatever is focused behind it.
+  if (shotOpen) { closeShot(); lastCommit = now; return; }
   // Post-commit lockout plus a visible press flash, so the user is
   // acknowledged and does not re-tap into the eight-tap shutdown.
   if (now - lastCommit < 250) { return; }
@@ -981,6 +1385,7 @@ function activate(idx) {
 }
 function commit() { activate(); }
 function move(dir) {
+  if (shotOpen) { closeShot(); return; }
   if (view === 'cap' || view === 'boot') { return; }
   if (view === 'zip') { zipTurn(dir); return; }
   if (eraseCount) { eraseCount = 0; }                  // any wheel cancels erase
@@ -997,6 +1402,13 @@ window.addEventListener('scrollDown', function () { move(1); });
 // crash this WebView about 3 s later. Rail cells and list rows bind their own
 // handlers in renderRail/bindRow so a tap hits what you actually pointed at.
 el('v-zip').addEventListener('pointerdown', function () { zipCommit(); });
+el('photo').addEventListener('pointerdown', function (ev) {
+  ev.stopPropagation();
+  if (lastShownSci) { openShot(lastShownSci); }
+});
+el('shot').addEventListener('pointerdown', function (ev) {
+  ev.stopPropagation(); closeShot();
+});
 
 /* ---------- startup ---------- */
 if (navigator.serviceWorker) {
@@ -1022,6 +1434,7 @@ whenSDKReady(function (host) {
     try { dex = v ? JSON.parse(v) : {}; } catch (e) { dex = {}; }
     if (view === 'home') { renderHome(); }
   });
+  store.get(YAM_KEY).then(function (v) { if (v === '0') { yamOn = false; } });
   store.get(SAVE_KEY).then(function (v) {
     var n = parseInt(v, 10);
     if (n >= 0 && n < SAVE_LEVELS.length) { saveLevel = n; }

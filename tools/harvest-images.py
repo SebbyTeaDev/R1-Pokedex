@@ -40,7 +40,7 @@ API = "https://en.wikipedia.org/w/api.php"
 UA = "R1-Pokedex/1.0 (https://github.com/SebbyTeaDev/R1-Pokedex; personal project)"
 
 THUMB_PX = 250      # server-side buckets are fixed: 60,120,250,330,500. 240 -> HTTP 400.
-OUT_PX = 80         # final square, measured at ~1541 B WebP q70
+OUT_PX = 160       # 160 not 80: the fullscreen view upscales 1.5x instead of 3x.
 QUALITY = 70
 API_DELAY = 0.5     # documented ceiling is 200 req/min; this is well under
 IMG_DELAY = 1.0     # the image CDN 429s at 2 req/s, is clean at 1

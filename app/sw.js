@@ -17,7 +17,8 @@
    silently orphans that and forces the user to fetch it all again. The shell
    is network-first, so shell changes need no bump. */
 var CACHE = 'r1-pokedex-v1';
-var SHELL = ['./', './index.html', './birdnet.js', './vendor/tf.min.js'];
+var SHELL = ['./', './index.html', './birdnet.js', './yamnet.js',
+             './vendor/tf.min.js'];
 
 self.addEventListener('install', function (e) {
     e.waitUntil(
