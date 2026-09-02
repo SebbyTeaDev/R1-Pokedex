@@ -473,8 +473,8 @@ Pokedex idiom anyway.
 
 | | |
 |---|---|
-| Format | 80x80 WebP q70, cover-cropped |
-| Total | **9.22 MB**, mean 1487 B per image |
+| Format | 256x256 WebP q70, cover-cropped from a 500px source |
+| Total | **56.5 MB**, mean 9111 B per image |
 | Packing | ONE blob + offset index, not 6498 files |
 | Source | Wikimedia Commons via the Wikipedia pageimages API |
 | Licences | zero NC, zero ND. 70% CC BY-SA, 22% CC BY, 7% PD/CC0 |
@@ -496,6 +496,15 @@ Two traps in the harvest, both fixed in `tools/harvest-images.py`:
 
 - **Arbitrary thumbnail widths return HTTP 400.** Only 60/120/250/330/500 are
   valid buckets, so a request for 240 fails.
+- **Fetch the 500 bucket, not 250.** Cover-cropping to a square keeps only the
+  SHORT side, so a 250px-wide landscape photo yields a ~167px square. The pack
+  was silently capped there: raising OUT_PX alone would have upscaled a 167px
+  original into bigger files with no new detail. The bucket is just a path
+  segment, so an existing meta.json can be reused by rewriting `/250px-`.
+- **Immutable assets need versioned filenames.** `app/sw.js` caches
+  `data/birds.*` cache-first, so a rebuilt pack under the same name would never
+  reach a device holding the old one. Hence `birds-256.webpack`; the resolution
+  is in the URL and a new pack is simply a new URL.
 - **Redirect targets are many-to-one.** Several species share one article —
   *Acanthis flammea* and relatives all redirect to "Redpoll" — so a map keyed by
   destination title silently drops all but one. That is how a bird as common as

@@ -1,6 +1,6 @@
 Species photographs bundled in app/data/birds.webpack
 Source: Wikimedia Commons via the Wikipedia pageimages API.
-Each image was cover-cropped to square and resized to 160x160 WebP. No other modification.
+Each image was cover-cropped to square and resized to 256x256 WebP. No other modification.
 Licences are as stated per entry; see each file page for full terms.
 
 Abroscopus albogularis	Francesco Veronesi from Italy	CC BY-SA 2.0	https://commons.wikimedia.org/wiki/File:Rufous-faced_Warbler_-_Bhutan_S4E0984_(19261554082)_(2).jpg

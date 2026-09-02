@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c2">
-<script>window.__BUILD = "c2";</script>
+<meta name="build" content="c3">
+<script>window.__BUILD = "c3";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -1507,10 +1507,10 @@ function loadPhotos() {
   photoWanted = true;
   // Never compete with a live capture for bandwidth or main-thread time.
   if (busy) { return; }
-  fetch('data/birds.idx.json').then(function (r) { return r.json(); })
+  fetch('data/birds-256.idx.json').then(function (r) { return r.json(); })
     .then(function (idx) {
       photoIdx = idx;
-      return fetch('data/birds.webpack').then(function (r) { return r.arrayBuffer(); });
+      return fetch('data/birds-256.webpack').then(function (r) { return r.arrayBuffer(); });
     })
     .then(function (buf) { photoBuf = buf; rerenderPhotos(); })
     .catch(function () { photoIdx = null; });

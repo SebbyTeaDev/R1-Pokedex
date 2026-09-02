@@ -334,9 +334,13 @@ def phase_pack():
 
     # One blob, not 6511 files: on a 4KB-block filesystem individual files cost
     # ~166% overhead (10MB of images occupying ~27MB on the device).
-    with open(os.path.join(OUT, "birds.webpack"), "wb") as fh:
+    # Versioned by resolution. The service worker caches these CACHE-FIRST as
+    # immutable, so a rebuilt pack at the same filename would never reach a
+    # device that already holds the old one — immutability requires the URL to
+    # change when the bytes do.
+    with open(os.path.join(OUT, "birds-%d.webpack" % OUT_PX), "wb") as fh:
         fh.write(bytes(blob))
-    json.dump(index, io.open(os.path.join(OUT, "birds.idx.json"), "w", encoding="utf-8"),
+    json.dump(index, io.open(os.path.join(OUT, "birds-%d.idx.json" % OUT_PX), "w", encoding="utf-8"),
               separators=(",", ":"), sort_keys=True)
 
     # MediaWiki normalises page titles by turning underscores into spaces, so
