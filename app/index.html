@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c5">
-<script>window.__BUILD = "c5";</script>
+<meta name="build" content="c6">
+<script>window.__BUILD = "c6";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -363,6 +363,10 @@ var mode = 'single';        // 'monitor' routes results to the session list
 var YAM_KEY = 'pokedex_yam';
 var dex = {}, store = null, zip = null, nearby = null;
 var TAXA = {}, ZIP3 = {}, geoTiers = null;
+// none | noload | loading | ready | failed:<why>. The 6.8MB range model is
+// the one asset that can plausibly fail on a slow link, and when it does the
+// only symptom is an empty NEARBY — which looks like a bug in the count.
+var geoState = 'none';
 var view = 'boot', focus = 0;
 
 var TAXON_LONG  = { bird:'', amphibian:'AMPHIBIAN', insect:'INSECT', mammal:'MAMMAL' };
@@ -798,6 +802,7 @@ function focusables() {
             { label:'ANIMAL FALLBACK', act:function(){ toggleYam(); } },
             { label:'CHECK DEPLOY', act:function(){ checkDeploy(); } },
             { label:'MIC TEST',     act:function(){ show('mic'); micTest(); } },
+            { label:'RANGE MODEL',  act:function(){ requestGeo(); renderCfg(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
   }
   if (view === 'az') {
@@ -879,8 +884,9 @@ function renderHome() {
   }
   // Two meters on purpose: 6511 reads ~0% forever and is demoralising alone;
   // the nearby count is the achievable one, and the actual game.
-  row('DEX', Object.keys(dex).length + ' / 6511');
-  row('NEARBY', nearby ? countSeenNearby() + ' / ' + nearby.length : 'set ZIP',
+  row('CAUGHT', Object.keys(dex).length + ' of 6511');
+  row('NEARBY', nearby ? countSeenNearby() + ' of ' + nearby.length
+                       : (zip ? geoState : 'set ZIP'),
       nearby ? 'var(--green)' : 'var(--ink3)');
   row('ZIP', zip || '-----');
   row('WEEK', String(week48()) + ' / 48');
@@ -1206,6 +1212,7 @@ function renderCfg() {
               yamOn ? 'ON  16MB' : 'OFF',
               deployMsg,
               '',
+              geoState === 'ready' ? (nearby.length + ' nearby') : geoState,
               eraseCount ? (3 - eraseCount) + ' more presses'
                          : Object.keys(dex).length + ' entries'];
   l.innerHTML = '';
@@ -1216,7 +1223,8 @@ function renderCfg() {
     nm.className = 'nm'; nm.textContent = it.label;
     var v = document.createElement('span');
     v.className = 'rt'; v.textContent = vals[i];
-    if (i === 6 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 7 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 6 && geoState.indexOf('failed') === 0) { v.style.color = 'var(--red-txt)'; }
     if (i === 4 && deployBad) { v.style.color = 'var(--red-txt)'; }
     d.appendChild(nm); d.appendChild(v);
     bindRow(d, i);
@@ -1591,9 +1599,11 @@ function rerenderPhotos() {
 
 /* ---------- range ---------- */
 function requestGeo() {
-  if (!zip || !ready || !worker) { return; }
+  if (!zip) { geoState = 'no ZIP set'; return; }
+  if (!ready || !worker) { geoState = 'waiting for model'; return; }
   var ll = ZIP3[zip.slice(0, 3)];
-  if (!ll) { return; }
+  if (!ll) { geoState = 'ZIP ' + zip.slice(0, 3) + ' not in table'; return; }
+  geoState = 'requested';
   worker.postMessage({ message:'geo', lat:ll[0], lon:ll[1], week:week48() });
 }
 
@@ -1603,6 +1613,13 @@ function boot() {
   worker.addEventListener('message', function (ev) {
     var d = ev.data;
     if (d.message === 'error') {
+      if (d.where === 'geo') {
+        // A range-model failure must not look like a broken species count.
+        geoState = 'failed: ' + String(d.error).slice(0, 40);
+        if (view === 'cfg') { renderCfg(); }
+        if (view === 'dexmenu') { renderMenu(); }
+        return;
+      }
       leds(1, 0, 0); title('FAILED'); busy = false;
       el('bootTxt').textContent = 'FAILED';
       el('bootSub').textContent = d.where + ': ' + String(d.error).slice(0, 50);
@@ -1623,9 +1640,13 @@ function boot() {
       setTimeout(function () { if (!busy) { loadPhotos(); } }, 4000);
       return;
     }
-    if (d.message === 'geo_loading') { title('RANGE...'); return; }
+    if (d.message === 'geo_loading') {
+      geoState = 'loading'; title('RANGE...');
+      if (view === 'cfg') { renderCfg(); }
+      return;
+    }
     if (d.message === 'geo') {
-      nearby = d.nearby; geoTiers = d.tiers;
+      nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready';
       if (view === 'home') { title('POKEDEX'); renderHome(); }
       return;
     }
