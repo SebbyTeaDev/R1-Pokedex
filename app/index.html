@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c9">
-<script>window.__BUILD = "c9";</script>
+<meta name="build" content="d1">
+<script>window.__BUILD = "d1";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -367,6 +367,7 @@ var TAXA = {}, ZIP3 = {}, geoTiers = null;
 // the one asset that can plausibly fail on a slow link, and when it does the
 // only symptom is an empty NEARBY — which looks like a bug in the count.
 var geoState = 'none';
+var geoStats = null;
 // A killed worker throws nothing on postMessage and fires no error event; it
 // simply stops answering. Silence is the only symptom, so probe for it.
 var workerState = 'press to ping';
@@ -1691,7 +1692,7 @@ function boot() {
       return;
     }
     if (d.message === 'geo') {
-      nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready';
+      nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready'; geoStats = d.stats;
       refresh();
       return;
     }
@@ -1777,8 +1778,12 @@ function move(dir) {
 }
 
 window.addEventListener('sideClick',  function () { commit(); });
-window.addEventListener('scrollUp',   function () { move(-1); });
-window.addEventListener('scrollDown', function () { move(1); });
+/* Wheel direction is inverted relative to what the hardware reports: rolling
+   the wheel the way that reads as "down" fires scrollUp on this firmware.
+   Mapped at the listener so focus movement, list scrolling and the ZIP reel
+   all flip together rather than only some of them. */
+window.addEventListener('scrollUp',   function () { move(1); });
+window.addEventListener('scrollDown', function () { move(-1); });
 // Touchscreen. pointerdown only, and never preventDefault — touch handlers
 // crash this WebView about 3 s later. Rail cells and list rows bind their own
 // handlers in renderRail/bindRow so a tap hits what you actually pointed at.

@@ -130,11 +130,26 @@ async function main() {
             }
         }
         near.sort(function (a, b) { return b.score - a.score })
+
+        /* Report the raw distribution, not just the count. A count of exactly
+           6511 means EVERY species cleared the threshold, which is what a
+           model returning a near-constant value looks like — and this device
+           computes at lower WebGL precision than desktop. min/max/mean tell
+           the two apart: a working model spans ~0.0006 to ~0.99. */
+        var mn = 1, mx = 0, sum = 0
+        for (var q = 0; q < geoScores.length; q++) {
+            var v = geoScores[q]
+            if (v < mn) { mn = v }
+            if (v > mx) { mx = v }
+            sum += v
+        }
         postMessage({
             message: 'geo',
             week: data.week,
             nearby: near,
-            tiers: countTiers(geoScores)
+            tiers: countTiers(geoScores),
+            stats: { min: mn, max: mx, mean: sum / geoScores.length,
+                     n: geoScores.length, lat: data.lat, lon: data.lon }
         })
     }
 
