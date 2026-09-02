@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="d1">
-<script>window.__BUILD = "d1";</script>
+<meta name="build" content="d2">
+<script>window.__BUILD = "d2";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -1250,9 +1250,24 @@ function renderCfg() {
   });
   var info = document.createElement('div');
   info.className = 'hint';
+  var extra = '';
+  if (geoStats) {
+    /* A working range model spans roughly 0.0006 to 0.99. Values all bunched
+       together mean it is not computing here — and then EVERY species clears
+       the nearby threshold, which is exactly what a count of 6511 (the species
+       total) looks like. This device already measures lower WebGL precision
+       than desktop, so that is a real possibility rather than a UI bug. */
+    extra = '\nrange ' + geoStats.min.toFixed(4) + ' - ' + geoStats.max.toFixed(3) +
+            ' avg ' + geoStats.mean.toFixed(3) +
+            '\nat ' + geoStats.lat.toFixed(2) + ', ' + geoStats.lon.toFixed(2);
+    if (geoStats.max - geoStats.min < 0.05) {
+      extra += '\nRANGE MODEL FLAT - broken here';
+    }
+  } else if (geoState !== 'none') {
+    extra = '\nrange: ' + geoState;
+  }
   info.textContent = 'build ' + window.__BUILD +
-    '\nBirdNET 2.4 - 6511 species\n' + (store ? store.kind : '') +
-    '\nrarity = how often birders\nreport a species here';
+    '\nBirdNET 2.4 - 6511 species\n' + (store ? store.kind : '') + extra;
   l.appendChild(info);
   scrollFocusIntoView(l);
 }
