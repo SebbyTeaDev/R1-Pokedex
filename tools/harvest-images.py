@@ -39,8 +39,14 @@ API = "https://en.wikipedia.org/w/api.php"
 # Wikimedia requires a real, contactable User-Agent. Without one the CDN 403s.
 UA = "R1-Pokedex/1.0 (https://github.com/SebbyTeaDev/R1-Pokedex; personal project)"
 
-THUMB_PX = 250      # server-side buckets are fixed: 60,120,250,330,500. 240 -> HTTP 400.
-OUT_PX = 160       # 160 not 80: the fullscreen view upscales 1.5x instead of 3x.
+# Server-side buckets are fixed: 60,120,250,330,500. A request for 240 -> HTTP 400.
+# 250 was too small: after cover-cropping to a square the usable side is the
+# SHORT side, ~167px for a typical landscape photo, so a 160px pack was already
+# at the source's limit and packing larger would only have upscaled.
+THUMB_PX = 500
+# The panel is 240 CSS px at DPR 2 = 480 physical, so fullscreen upscales
+# 480/OUT_PX. 256 keeps that under 2x and still downscales from a 500px source.
+OUT_PX = 256
 QUALITY = 70
 API_DELAY = 0.5     # documented ceiling is 200 req/min; this is well under
 IMG_DELAY = 1.0     # the image CDN 429s at 2 req/s, is clean at 1
@@ -92,6 +98,12 @@ def species():
                 continue
             out.append((sci, common or sci))
     return out
+
+
+def rawdir():
+    # Keep each source resolution in its own directory so raising THUMB_PX
+    # refetches instead of silently reusing smaller images already on disk.
+    return os.path.join(WORK, "raw%d" % THUMB_PX)
 
 
 def chunks(seq, n):
@@ -257,7 +269,7 @@ def phase_attrib():
 
 def phase_fetch():
     meta = json.load(io.open(os.path.join(WORK, "meta.json"), encoding="utf-8"))
-    raw = os.path.join(WORK, "raw")
+    raw = rawdir()
     os.makedirs(raw, exist_ok=True)
 
     items = sorted(meta.items())
@@ -268,7 +280,10 @@ def phase_fetch():
     fails = []
     for i, (sci, m) in enumerate(todo):
         try:
-            data = get(m["thumb"])
+            # meta.json holds 250px URLs; the bucket is just a path segment,
+            # so rewriting it avoids re-running the whole metadata pass.
+            url = m["thumb"].replace("/250px-", "/%dpx-" % THUMB_PX)
+            data = get(url)
             with open(os.path.join(raw, sci.replace("/", "_") + ".bin"), "wb") as fh:
                 fh.write(data)
         except Exception as e:
@@ -289,7 +304,7 @@ def phase_pack():
     meta = json.load(io.open(os.path.join(WORK, "meta.json"), encoding="utf-8"))
     attrib_path = os.path.join(WORK, "attrib.json")
     attrib = json.load(io.open(attrib_path, encoding="utf-8")) if os.path.exists(attrib_path) else {}
-    raw = os.path.join(WORK, "raw")
+    raw = rawdir()
     os.makedirs(OUT, exist_ok=True)
 
     sp = species()

@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c1">
-<script>window.__BUILD = "c1";</script>
+<meta name="build" content="c2">
+<script>window.__BUILD = "c2";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -192,7 +192,10 @@
                white-space:nowrap; text-overflow:ellipsis; }
 
   /* ---- monitor ---- */
-  #monSpec { display:block; width:100%; height:72px; image-rendering:pixelated;
+  /* 480x176 internal against 240x88 CSS at DPR 2 = 480x176 physical, so one
+     canvas pixel is one screen pixel. It was 480x72 against the same panel,
+     which the browser then stretched — the rows were doubled, not detailed. */
+  #monSpec { display:block; width:100%; height:88px; image-rendering:pixelated;
              background:var(--sunk); border:1px solid var(--line-hi); border-radius:2px; }
   #monStat { display:flex; gap:6px; font-size:9px; color:var(--ink2); padding:3px 1px 0; }
   #monStat b { font-weight:normal; color:var(--ink3); }
@@ -269,7 +272,7 @@
   <div id="v-mon" class="view">
     <div style="flex:0 0 auto;padding:4px 5px 0">
       <div id="monSpecWrap" style="position:relative">
-        <canvas id="monSpec" width="480" height="72"></canvas>
+        <canvas id="monSpec" width="480" height="176"></canvas>
         <span class="fl t">15k</span><span class="fl b">0Hz</span>
       </div>
       <div id="monStat"></div>
@@ -478,7 +481,7 @@ function monStart() {
   mode = 'monitor';
   mon = { ring:new Float32Array(WINDOW), pos:0, total:0, lastAt:0,
           inFlight:false, chunks:0, drops:0, t0:Date.now(), hits:{},
-          yamCopy:null, yamAt:0, yamBusy:false,
+          yamCopy:null, yamAt:0, yamBusy:false, cols:0,
           stream:null, ctx:null, src:null, node:null, an:null, raf:0, freq:null,
           maxBin:0, stopping:false };
   show('mon'); title('LISTENING'); leds(0, 2, 0);
@@ -501,7 +504,9 @@ function monStart() {
     }
     mon.src = mon.ctx.createMediaStreamSource(mon.stream);
     mon.an = mon.ctx.createAnalyser();
-    mon.an.fftSize = 2048; mon.an.smoothingTimeConstant = 0.25;
+    // 4096-point FFT: ~11.7 Hz per bin. At 2048 the extra canvas rows would
+    // just repeat the same bins rather than resolve anything new.
+    mon.an.fftSize = 4096; mon.an.smoothingTimeConstant = 0.2;
     mon.freq = new Uint8Array(mon.an.frequencyBinCount);
     mon.maxBin = Math.round(15000 / (RATE / 2) * mon.an.frequencyBinCount);
     mon.node = mon.ctx.createScriptProcessor(4096, 1, 1);
@@ -553,22 +558,43 @@ function monScrollInit() {
   mcol = mctx.createImageData(1, c.height);
   mx = 0;
 }
+/* Columns advance with ELAPSED TIME, not frame rate. Frame-driven scrolling
+   makes the x-axis mean different things on different devices — the panel
+   filled in 8 s at 60fps and took a minute on a throttled tab — so a bird
+   call's width told you nothing. At 40 ms per column the panel is a fixed
+   ~19 s of history whatever the render rate; when frames are scarce it draws
+   the columns that are due rather than falling behind. */
+var MS_PER_COL = 40;
 function monDraw() {
   if (!mon || mon.stopping) { return; }
-  mon.an.getByteFrequencyData(mon.freq);
   var c = el('monSpec'), H = c.height, W = c.width, px = mcol.data;
-  if (mx >= W) { mctx.drawImage(c, -1, 0); mx = W - 1; }   // scroll left
-  for (var y = 0; y < H; y++) {
-    var v = mon.freq[((1 - y / H) * mon.maxBin) | 0] / 255;
-    v = v * v;
-    var r, g, b;
-    if (v < 0.5) { var a = v * 2; r = 13 + a*232 | 0; g = 13 + a*145 | 0; b = 15 - a*4 | 0; }
-    else { var t = (v - 0.5) * 2; r = 245; g = 158 + t*97 | 0; b = 11 + t*244 | 0; }
-    var o = y * 4;
-    px[o] = r; px[o+1] = g; px[o+2] = b; px[o+3] = 255;
+  var due = ((Date.now() - mon.t0) / MS_PER_COL) | 0;
+  if (due > mon.cols) {
+    // One analyser read per batch: within a single frame the data is identical
+    // anyway, so re-reading per column would buy nothing.
+    mon.an.getByteFrequencyData(mon.freq);
+    for (var y = 0; y < H; y++) {
+      var v = mon.freq[((1 - y / H) * mon.maxBin) | 0] / 255;
+      v = v * v;
+      var r, g, b;
+      if (v < 0.5) { var a = v * 2; r = 13 + a*232 | 0; g = 13 + a*145 | 0; b = 15 - a*4 | 0; }
+      else { var t = (v - 0.5) * 2; r = 245; g = 158 + t*97 | 0; b = 11 + t*244 | 0; }
+      var o = y * 4;
+      px[o] = r; px[o+1] = g; px[o+2] = b; px[o+3] = 255;
+    }
+    // Cap the catch-up: after a long stall, redrawing thousands of identical
+    // columns would just wipe the panel with one stale spectrum.
+    var n = Math.min(due - mon.cols, 24);
+    for (var k = 0; k < n; k++) {
+      if (mx >= W) { mctx.drawImage(c, -1, 0); mx = W - 1; }   // scroll left
+      mctx.putImageData(mcol, mx, 0);
+      mx++;
+    }
+    // Advance by what was actually DRAWN, not by what was due — setting this
+    // to `due` after a capped batch silently threw the remaining columns away
+    // and left the panel permanently behind the clock.
+    mon.cols += n;
   }
-  mctx.putImageData(mcol, mx, 0);
-  mx++;
   mon.raf = requestAnimationFrame(monDraw);
 }
 
