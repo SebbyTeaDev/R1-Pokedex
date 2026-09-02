@@ -81,100 +81,17 @@ async function main() {
     await predict(tf.zeros([1, 144000]))
     postMessage({ message: 'warmup', ms: performance.now() - t })
 
-    /* ---------- range model ----------
-       Separate 6.8MB graph model: [lat, lon, week] -> per-label occurrence.
-       Loaded lazily on the first geo request so a user with no ZIP set never
-       pays for it, and never before 'ready' so it cannot delay first capture. */
-    var areaModel = null
-    var geoScores = null                 // per-label occurrence for the saved ZIP
-    // The model clamps its logits to +/-15, so 0.000553 is a hard floor meaning
-    // "definitively not in range" — a distinct class, not a small probability.
-    var GEO_FLOOR = 0.00056
-    /* "In your area" must mean plausibly hearable, not merely recorded once.
-       At 0.0025 the San Francisco list ran to 235 and its tail was Black-footed
-       Albatross, Laysan Albatross, Eurasian Coot and Verdin — pelagic and
-       desert birds. 0.02 is the RARE tier floor and gives 143 there, which is
-       a list you could actually work through. */
-    var NEARBY_MIN = 0.02
-
-    var speciesSci = labels.map(function (l) { return l.split('_')[0] })
-    var speciesCommon = labels.map(function (l) {
-        var p = l.split('_'); return p[1] || p[0]
-    })
-
-    async function geo(data) {
-        if (!areaModel) {
-            postMessage({ message: 'geo_loading' })
-            areaModel = await tf.loadGraphModel(BASE + 'area-model/model.json')
-        }
-        // Raw degrees and a 1..48 week. The scaling is baked into the graph, so
-        // pre-normalizing would double-apply it. Upstream's own caller computes
-        // a 1..53 week, which extrapolates past the trained domain, and passes
-        // -1 for "year-round" — but in this export the year-round mask is a
-        // constant, so -1 silently aliases to late November instead.
-        var t = tf.tensor2d([[data.lat, data.lon, data.week]], [1, 3], 'float32')
-        var out = areaModel.predict(t)
-        // Output is already sigmoid-passed; do not squash it again. Values are
-        // eBird checklist frequency, clamped to [0.000553, 0.999447], where the
-        // low value is a hard floor meaning "not expected here at all".
-        geoScores = await out.data()
-        t.dispose()
-        out.dispose()
-
-        // Build the NEARBY list here rather than shipping 6522 labels to the
-        // page just so it can join them against an array.
-        var near = []
-        for (var i = 0; i < geoScores.length; i++) {
-            if (geoScores[i] > NEARBY_MIN && !NON_SPECIES[speciesSci[i]]) {
-                near.push({ sci: speciesSci[i], common: speciesCommon[i], score: geoScores[i] })
-            }
-        }
-        near.sort(function (a, b) { return b.score - a.score })
-
-        /* Report the raw distribution, not just the count. A count of exactly
-           6511 means EVERY species cleared the threshold, which is what a
-           model returning a near-constant value looks like — and this device
-           computes at lower WebGL precision than desktop. min/max/mean tell
-           the two apart: a working model spans ~0.0006 to ~0.99. */
-        var mn = 1, mx = 0, sum = 0
-        for (var q = 0; q < geoScores.length; q++) {
-            var v = geoScores[q]
-            if (v < mn) { mn = v }
-            if (v > mx) { mx = v }
-            sum += v
-        }
-        postMessage({
-            message: 'geo',
-            week: data.week,
-            nearby: near,
-            tiers: countTiers(geoScores),
-            stats: { min: mn, max: mx, mean: sum / geoScores.length,
-                     n: geoScores.length, lat: data.lat, lon: data.lon }
-        })
-    }
-
-    function countTiers(s) {
-        var t = { common: 0, uncommon: 0, rare: 0, veryRare: 0, exceptional: 0 }
-        for (var i = 0; i < s.length; i++) {
-            if (NON_SPECIES[speciesSci[i]]) { continue }
-            var v = s[i]
-            if (v >= 0.30) { t.common++ }
-            else if (v >= 0.08) { t.uncommon++ }
-            else if (v >= 0.02) { t.rare++ }
-            else if (v >= 0.0025) { t.veryRare++ }
-            else if (v > GEO_FLOOR) { t.exceptional++ }
-        }
-        return t
-    }
+    /* The range model used to live here. It now runs in geo.js on the CPU
+       backend: on this device's WebGL path it returned sigmoid(0) for all
+       6522 classes (measured 0.4470-0.520 against 0.0006-0.959 on desktop),
+       so every species cleared the nearby threshold and the count read 6511.
+       tf.setBackend is global per tfjs instance, so it cannot share this
+       worker without stranding 49 MB of weights on the wrong backend. */
 
     onmessage = function (ev) {
         var d = ev.data
         if (d && d.message === 'ping') {
-            postMessage({ message: 'pong', stage: 'ready', geo: !!areaModel })
-            return
-        }
-        if (d && d.message === 'geo') {
-            geo(d).catch(function (e) { fail('geo', e) })
+            postMessage({ message: 'pong', stage: 'ready' })
             return
         }
         run(d).catch(function (e) { fail('identify', e) })
@@ -206,9 +123,9 @@ async function main() {
                     // UI can report interference instead of filing a passing
                     // siren in the collection as a species.
                     noise: NON_SPECIES[sci] === 1,
-                    // null when no ZIP is set — the UI must not render a rarity
-                    // it does not have. -1 marks the model's off-range floor.
-                    geo: geoScores ? (geoScores[i] <= GEO_FLOOR ? -1 : geoScores[i]) : null
+                    // Rarity is attached by the page from the geo worker's list;
+                    // this worker no longer holds range scores.
+                    geo: null
                 })
             }
         }

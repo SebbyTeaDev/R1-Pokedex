@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="d2">
-<script>window.__BUILD = "d2";</script>
+<meta name="build" content="d3">
+<script>window.__BUILD = "d3";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -357,7 +357,7 @@ function bandOf(c) {
 }
 
 var el = function (id) { return document.getElementById(id); };
-var worker = null, ready = false, busy = false, lastTrigger = 0, lastCommit = 0;
+var worker = null, geoWorker = null, ready = false, busy = false, lastTrigger = 0, lastCommit = 0;
 var yam = null, yamOn = true;
 var mode = 'single';        // 'monitor' routes results to the session list
 var YAM_KEY = 'pokedex_yam';
@@ -1653,13 +1653,56 @@ function pingWorker() {
   catch (e) { workerState = 'NO REPLY - ' + (e && e.name); renderCfg(); }
 }
 
+function onGeoMessage(ev) {
+  var d = ev.data;
+  if (d.message === 'geo_loading') { geoState = 'loading'; refresh(); return; }
+  if (d.message === 'geo') {
+    nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready'; geoStats = d.stats;
+    refresh();
+    return;
+  }
+  if (d.message === 'error') {
+    geoState = 'failed: ' + String(d.error).slice(0, 40);
+    refresh();
+    return;
+  }
+}
+
 function requestGeo() {
   if (!zip) { geoState = 'no ZIP set'; return; }
   if (!ready || !worker) { geoState = 'waiting for model'; return; }
   var ll = ZIP3[zip.slice(0, 3)];
   if (!ll) { geoState = 'ZIP ' + zip.slice(0, 3) + ' not in table'; return; }
   geoState = 'requested';
-  worker.postMessage({ message:'geo', lat:ll[0], lon:ll[1], week:week48() });
+  /* Its own worker, on the CPU backend. This model returns sigmoid(0) for
+     every class on this device's WebGL path — measured 0.4470-0.520 against
+     0.0006-0.959 on desktop — and tf.setBackend() is global per tfjs
+     instance, so it cannot share the BirdNET worker without stranding 49 MB
+     of weights on the wrong backend. */
+  if (!geoWorker) {
+    try { geoWorker = new Worker('geo.js'); }
+    catch (e) { geoState = 'geo worker failed'; return; }
+    geoWorker.addEventListener('message', onGeoMessage);
+    geoWorker.addEventListener('error', function (e) {
+      geoState = 'geo worker error: ' + (e.message || '?').slice(0, 30);
+      refresh();
+    });
+  }
+  geoWorker.postMessage({ message:'geo', lat:ll[0], lon:ll[1], week:week48() });
+}
+
+function onGeoMessage(ev) {
+  var d = ev.data;
+  if (d.message === 'geo_loading') { geoState = 'loading'; refresh(); return; }
+  if (d.message === 'geo') {
+    nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready'; geoStats = d.stats;
+    refresh();
+    return;
+  }
+  if (d.message === 'error') {
+    geoState = 'failed: ' + String(d.error).slice(0, 40);
+    refresh();
+  }
 }
 
 /* ---------- worker ---------- */
@@ -1701,16 +1744,7 @@ function boot() {
       refresh();
       return;
     }
-    if (d.message === 'geo_loading') {
-      geoState = 'loading';
-      refresh();
-      return;
-    }
-    if (d.message === 'geo') {
-      nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready'; geoStats = d.stats;
-      refresh();
-      return;
-    }
+
     if (d.message === 'result') {
       // A window can still be in flight when STOP is pressed. With no live
       // session there is nothing to add it to, and rendering it would wipe

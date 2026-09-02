@@ -301,6 +301,23 @@ tfjs selecting different kernel paths (packing, im2col, tile sizes) under the
 r1's texture-size and capability limits. Different summation order, same
 precision.
 
+**The range model does NOT work on this GPU — run it on the CPU.** Measured
+on-device output was **0.4470 - 0.520, avg 0.481** across all 6522 classes,
+i.e. sigmoid(0) for everything, against **0.0006 - 0.959** on desktop for the
+identical input. Every species then cleared the nearby threshold, so the count
+read exactly 6511 — the species total, which is the tell.
+
+It is plausibly the sinusoid front-end: each of lat/lon/week is expanded into
+48 phase-shifted sinusoids before three dense layers, and this GPU measures
+~37x worse small-argument sin/cos than desktop. Rather than chase the op, it
+runs in `app/geo.js` on the **CPU backend** — three dense layers, largest
+512x6522, about 6.7 MFLOP, so ~60 ms at this device's 114 MFLOP/s, once per
+ZIP or week change.
+
+It needs its own worker because `tf.setBackend()` is global per tfjs instance:
+switching the BirdNET worker to CPU would strand its 49 MB of weights on the
+GPU backend.
+
 **NEARBY uses the RARE tier floor (0.02), not the model's noise floor.** At
 0.0025 the San Francisco list ran to 235 and its tail was Black-footed
 Albatross, Laysan Albatross, Eurasian Coot and Verdin — pelagic and desert
