@@ -37,6 +37,17 @@ function fail(where, e) {
 self.addEventListener('error', function (e) { fail('worker', e.message) })
 self.addEventListener('unhandledrejection', function (e) { fail('worker', e.reason) })
 
+/* Liveness probe, installed BEFORE main() so it answers even while the model
+   is still loading — and replaced by the real handler once main() runs, which
+   re-checks for it. A worker that has been killed answers nothing at all, and
+   postMessage to a dead worker throws no error, so silence is the only
+   symptom. That is indistinguishable from "still thinking" without this. */
+onmessage = function (ev) {
+    if (ev.data && ev.data.message === 'ping') {
+        postMessage({ message: 'pong', stage: 'loading' })
+    }
+}
+
 main().catch(function (e) { fail('init', e) })
 
 async function main() {
@@ -143,6 +154,10 @@ async function main() {
 
     onmessage = function (ev) {
         var d = ev.data
+        if (d && d.message === 'ping') {
+            postMessage({ message: 'pong', stage: 'ready', geo: !!areaModel })
+            return
+        }
         if (d && d.message === 'geo') {
             geo(d).catch(function (e) { fail('geo', e) })
             return

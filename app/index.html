@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c7">
-<script>window.__BUILD = "c7";</script>
+<meta name="build" content="c8">
+<script>window.__BUILD = "c8";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -367,6 +367,10 @@ var TAXA = {}, ZIP3 = {}, geoTiers = null;
 // the one asset that can plausibly fail on a slow link, and when it does the
 // only symptom is an empty NEARBY — which looks like a bug in the count.
 var geoState = 'none';
+// A killed worker throws nothing on postMessage and fires no error event; it
+// simply stops answering. Silence is the only symptom, so probe for it.
+var workerState = 'press to ping';
+var pingAt = 0, pingTimer = 0;
 var view = 'boot', focus = 0;
 
 var TAXON_LONG  = { bird:'', amphibian:'AMPHIBIAN', insect:'INSECT', mammal:'MAMMAL' };
@@ -803,6 +807,7 @@ function focusables() {
             { label:'CHECK DEPLOY', act:function(){ checkDeploy(); } },
             { label:'MIC TEST',     act:function(){ show('mic'); micTest(); } },
             { label:'RANGE MODEL',  act:function(){ requestGeo(); renderCfg(); } },
+            { label:'WORKER',       act:function(){ pingWorker(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
   }
   if (view === 'az') {
@@ -1220,6 +1225,7 @@ function renderCfg() {
               deployMsg,
               '',
               geoState === 'ready' ? (nearby.length + ' nearby') : geoState,
+              workerState,
               eraseCount ? (3 - eraseCount) + ' more presses'
                          : Object.keys(dex).length + ' entries'];
   l.innerHTML = '';
@@ -1230,7 +1236,8 @@ function renderCfg() {
     nm.className = 'nm'; nm.textContent = it.label;
     var v = document.createElement('span');
     v.className = 'rt'; v.textContent = vals[i];
-    if (i === 7 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 8 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 7 && workerState.indexOf('NO REPLY') === 0) { v.style.color = 'var(--red-txt)'; }
     if (i === 6 && geoState.indexOf('failed') === 0) { v.style.color = 'var(--red-txt)'; }
     if (i === 4 && deployBad) { v.style.color = 'var(--red-txt)'; }
     d.appendChild(nm); d.appendChild(v);
@@ -1605,6 +1612,19 @@ function rerenderPhotos() {
 }
 
 /* ---------- range ---------- */
+function pingWorker() {
+  if (!worker) { workerState = 'no worker object'; renderCfg(); return; }
+  workerState = 'pinging...'; renderCfg();
+  pingAt = Date.now();
+  clearTimeout(pingTimer);
+  pingTimer = setTimeout(function () {
+    workerState = 'NO REPLY - worker dead';
+    if (view === 'cfg') { renderCfg(); }
+  }, 4000);
+  try { worker.postMessage({ message: 'ping' }); }
+  catch (e) { workerState = 'NO REPLY - ' + (e && e.name); renderCfg(); }
+}
+
 function requestGeo() {
   if (!zip) { geoState = 'no ZIP set'; return; }
   if (!ready || !worker) { geoState = 'waiting for model'; return; }
@@ -1645,6 +1665,13 @@ function boot() {
       // hold it until the app has been idle for a moment. Anything that
       // actually needs a photo calls loadPhotos() itself.
       setTimeout(function () { if (!busy) { loadPhotos(); } }, 4000);
+      return;
+    }
+    if (d.message === 'pong') {
+      clearTimeout(pingTimer);
+      workerState = 'alive ' + d.stage + ' ' + (Date.now() - pingAt) + 'ms' +
+                    (d.geo ? ' +range' : '');
+      if (view === 'cfg') { renderCfg(); }
       return;
     }
     if (d.message === 'geo_loading') {
