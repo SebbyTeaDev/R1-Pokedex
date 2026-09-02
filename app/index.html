@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c8">
-<script>window.__BUILD = "c8";</script>
+<meta name="build" content="c9">
+<script>window.__BUILD = "c9";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -806,7 +806,10 @@ function focusables() {
             { label:'ANIMAL FALLBACK', act:function(){ toggleYam(); } },
             { label:'CHECK DEPLOY', act:function(){ checkDeploy(); } },
             { label:'MIC TEST',     act:function(){ show('mic'); micTest(); } },
-            { label:'RANGE MODEL',  act:function(){ requestGeo(); renderCfg(); } },
+            // Re-requesting when a list already exists would replace a good
+            // answer with "requested" for no reason.
+            { label:'RANGE MODEL',
+              act:function(){ if (!nearby) { requestGeo(); } renderCfg(); } },
             { label:'WORKER',       act:function(){ pingWorker(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
   }
@@ -1268,6 +1271,15 @@ function scrollFocusIntoView(l) {
   else if (bot > l.scrollTop + l.clientHeight) { l.scrollTop = bot - l.clientHeight; }
 }
 
+/* Repaint whatever is on screen. Async results (geo, pong, photo pack) can
+   land while the user is on any view, and each handler previously repainted
+   one hard-coded view — so CFG sat on "requested" forever after the worker
+   had already answered. */
+function refresh() {
+  if (view === 'home') { title('POKEDEX'); renderHome(); }
+  else { rerender(); }
+}
+
 function rerender() {
   if (view === 'dex') { renderDex(); }
   else if (view === 'cfg') { renderCfg(); }
@@ -1550,7 +1562,7 @@ function loadPhotos() {
       photoIdx = idx;
       return fetch('data/birds-256.webpack').then(function (r) { return r.arrayBuffer(); });
     })
-    .then(function (buf) { photoBuf = buf; rerenderPhotos(); })
+    .then(function (buf) { photoBuf = buf; rerenderPhotos(); refresh(); })
     .catch(function () { photoIdx = null; });
   // {lic:[...], by:{sci:[name, licIndex]}} — licences are interned because
   // ~12 distinct strings across 6498 entries is a lot of repetition.
@@ -1619,7 +1631,7 @@ function pingWorker() {
   clearTimeout(pingTimer);
   pingTimer = setTimeout(function () {
     workerState = 'NO REPLY - worker dead';
-    if (view === 'cfg') { renderCfg(); }
+    refresh();
   }, 4000);
   try { worker.postMessage({ message: 'ping' }); }
   catch (e) { workerState = 'NO REPLY - ' + (e && e.name); renderCfg(); }
@@ -1643,8 +1655,7 @@ function boot() {
       if (d.where === 'geo') {
         // A range-model failure must not look like a broken species count.
         geoState = 'failed: ' + String(d.error).slice(0, 40);
-        if (view === 'cfg') { renderCfg(); }
-        if (view === 'dexmenu') { renderMenu(); }
+        refresh();
         return;
       }
       leds(1, 0, 0); title('FAILED'); busy = false;
@@ -1671,17 +1682,17 @@ function boot() {
       clearTimeout(pingTimer);
       workerState = 'alive ' + d.stage + ' ' + (Date.now() - pingAt) + 'ms' +
                     (d.geo ? ' +range' : '');
-      if (view === 'cfg') { renderCfg(); }
+      refresh();
       return;
     }
     if (d.message === 'geo_loading') {
-      geoState = 'loading'; title('RANGE...');
-      if (view === 'cfg') { renderCfg(); }
+      geoState = 'loading';
+      refresh();
       return;
     }
     if (d.message === 'geo') {
       nearby = d.nearby; geoTiers = d.tiers; geoState = 'ready';
-      if (view === 'home') { title('POKEDEX'); renderHome(); }
+      refresh();
       return;
     }
     if (d.message === 'result') {
