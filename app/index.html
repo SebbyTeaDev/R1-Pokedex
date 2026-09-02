@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="d3">
-<script>window.__BUILD = "d3";</script>
+<meta name="build" content="d4">
+<script>window.__BUILD = "d4";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -371,6 +371,10 @@ var geoStats = null;
 // A killed worker throws nothing on postMessage and fires no error event; it
 // simply stops answering. Silence is the only symptom, so probe for it.
 var workerState = 'press to ping';
+/* The range model ran without error on this GPU and still returned sigmoid(0)
+   for every class. YAMNet uses the same WebGL path, so "no error" proves
+   nothing about it either — this runs a fixed signal and reports the spread. */
+var yamState = 'press to test';
 var pingAt = 0, pingTimer = 0;
 var view = 'boot', focus = 0;
 
@@ -812,6 +816,7 @@ function focusables() {
             { label:'RANGE MODEL',
               act:function(){ if (!nearby) { requestGeo(); } renderCfg(); } },
             { label:'WORKER',       act:function(){ pingWorker(); } },
+            { label:'YAMNET TEST',  act:function(){ yamTest(); } },
             { label:'ERASE DEX', act:function(){ eraseArm(); } }];
   }
   if (view === 'az') {
@@ -1230,6 +1235,7 @@ function renderCfg() {
               '',
               geoState === 'ready' ? (nearby.length + ' nearby') : geoState,
               workerState,
+              yamState,
               eraseCount ? (3 - eraseCount) + ' more presses'
                          : Object.keys(dex).length + ' entries'];
   l.innerHTML = '';
@@ -1240,7 +1246,10 @@ function renderCfg() {
     nm.className = 'nm'; nm.textContent = it.label;
     var v = document.createElement('span');
     v.className = 'rt'; v.textContent = vals[i];
-    if (i === 8 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 9 && eraseCount) { v.style.color = 'var(--red-txt)'; }
+    if (i === 8 && (yamState.indexOf('FLAT') >= 0 || yamState.indexOf('ODD') >= 0)) {
+      v.style.color = 'var(--red-txt)';
+    }
     if (i === 7 && workerState.indexOf('NO REPLY') === 0) { v.style.color = 'var(--red-txt)'; }
     if (i === 6 && geoState.indexOf('failed') === 0) { v.style.color = 'var(--red-txt)'; }
     if (i === 4 && deployBad) { v.style.color = 'var(--red-txt)'; }
@@ -1640,6 +1649,14 @@ function rerenderPhotos() {
 }
 
 /* ---------- range ---------- */
+function yamTest() {
+  if (!yamOn) { yamState = 'fallback is OFF'; renderCfg(); return; }
+  if (!yam) { bootYam(); }
+  if (!yam) { yamState = 'no worker'; renderCfg(); return; }
+  yamState = 'testing...'; renderCfg();
+  yam.postMessage({ message: 'selftest' });
+}
+
 function pingWorker() {
   if (!worker) { workerState = 'no worker object'; renderCfg(); return; }
   workerState = 'pinging...'; renderCfg();
@@ -1765,6 +1782,19 @@ function bootYam() {
   try { yam = new Worker('yamnet.js'); } catch (e) { yam = null; return; }
   yam.addEventListener('message', function (ev) {
     var d = ev.data;
+    if (d.message === 'yamtest') {
+      /* Desktop reference for this exact signal: spread 0.000-0.512, mean
+         0.0085, top class 475 "Beep, bleep" then 392 "Buzzer" — correct for
+         two pure tones. A collapsed spread, or a different top class, means
+         this GPU is not computing it, exactly as the range model did not. */
+      var flat = (d.max - d.min) < 0.25;
+      var wrongTop = !d.top.length || d.top[0][0] !== 475;
+      yamState = d.max.toFixed(2) + ' #' + (d.top[0] ? d.top[0][0] : '?') +
+                 ' [' + d.backend + ']' +
+                 (flat ? ' FLAT' : wrongTop ? ' ODD' : ' ok');
+      refresh();
+      return;
+    }
     if (d.message === 'yam') {
       if (mon) { monYam(d); }
       return;

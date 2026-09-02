@@ -161,9 +161,64 @@ async function classify(pcm, debug) {
     postMessage({ message: 'yam', top: top.slice(0, 3), raw: raw, ms: performance.now() - t0 })
 }
 
+/* Self-test on a DETERMINISTIC signal generated here, so the device and a
+   desktop run the identical input with no asset to fetch. The range model
+   turned out to return sigmoid(0) for every class on this GPU while looking
+   fine, so "it runs without error" is not evidence that it computes. A
+   collapsed spread here means the same thing. */
+async function selftest() {
+    await load()
+    var n = 144000
+    var sig = new Float32Array(n)
+    var seed = 12345
+    for (var i = 0; i < n; i++) {
+        // LCG noise plus two tones — identical on every device.
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff
+        var noise = (seed / 0x7fffffff) * 2 - 1
+        sig[i] = 0.35 * Math.sin(2 * Math.PI * 1200 * i / 48000) +
+                 0.20 * Math.sin(2 * Math.PI * 3500 * i / 48000) +
+                 0.10 * noise
+    }
+    var t0 = performance.now()
+    var x = tf.tensor1d(normalize(to16k(sig)))
+    var scoresT = model.execute(x, 'Identity:0')
+    var scores = await scoresT.array()
+    x.dispose(); scoresT.dispose()
+
+    var peak = new Float32Array(scores[0].length)
+    for (var f = 0; f < scores.length; f++) {
+        for (var k = 0; k < peak.length; k++) {
+            if (scores[f][k] > peak[k]) { peak[k] = scores[f][k] }
+        }
+    }
+    var mn = 1, mx = 0, sum = 0
+    for (var j = 0; j < peak.length; j++) {
+        if (peak[j] < mn) { mn = peak[j] }
+        if (peak[j] > mx) { mx = peak[j] }
+        sum += peak[j]
+    }
+    var idx = []
+    for (var q = 0; q < peak.length; q++) { idx.push([q, peak[q]]) }
+    idx.sort(function (a, b) { return b[1] - a[1] })
+
+    postMessage({
+        message: 'yamtest',
+        backend: tf.getBackend(),
+        ms: performance.now() - t0,
+        frames: scores.length, classes: peak.length,
+        min: mn, max: mx, mean: sum / peak.length,
+        top: idx.slice(0, 5).map(function (p) { return [p[0], +p[1].toFixed(3)] })
+    })
+}
+
 onmessage = function (ev) {
     var d = ev.data
-    if (!d || d.message !== 'classify') { return }
+    if (!d) { return }
+    if (d.message === 'selftest') {
+        selftest().catch(function (e) { fail('selftest', e) })
+        return
+    }
+    if (d.message !== 'classify') { return }
     classify(d.pcm, d.debug).catch(function (e) { fail('classify', e) })
 }
 postMessage({ message: 'yam_ready' })
