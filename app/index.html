@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c4">
-<script>window.__BUILD = "c4";</script>
+<meta name="build" content="c5">
+<script>window.__BUILD = "c5";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -819,9 +819,12 @@ function focusables() {
       { label:'< BACK', act:function(){ show('home'); } },
       { label:'CAUGHT', right:String(Object.keys(dex).length),
         act:function(){ show('dex'); } },
-      { label:'NEARBY', right:nearby ? String(nearby.length) : 'set ZIP',
+      // Label the ZIP inline. NEARBY and ALL SPECIES were adjacent rows with
+      // bare numbers, and 6511 next to a local count reads as the local count.
+      { label:nearby ? 'NEARBY ' + zip : 'NEARBY',
+        right:nearby ? String(nearby.length) : (zip ? 'loading' : 'set ZIP'),
         act:function(){ if (nearby) { openNearby(); } } },
-      { label:'ALL SPECIES', right:'6511', act:function(){ azOpen(); } }
+      { label:'ALL SPECIES', right:'all 6511', act:function(){ azOpen(); } }
     ];
   }
   return [];
