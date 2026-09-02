@@ -79,7 +79,12 @@ async function main() {
     // The model clamps its logits to +/-15, so 0.000553 is a hard floor meaning
     // "definitively not in range" — a distinct class, not a small probability.
     var GEO_FLOOR = 0.00056
-    var NEARBY_MIN = 0.0025              // below this is not worth listing
+    /* "In your area" must mean plausibly hearable, not merely recorded once.
+       At 0.0025 the San Francisco list ran to 235 and its tail was Black-footed
+       Albatross, Laysan Albatross, Eurasian Coot and Verdin — pelagic and
+       desert birds. 0.02 is the RARE tier floor and gives 143 there, which is
+       a list you could actually work through. */
+    var NEARBY_MIN = 0.02
 
     var speciesSci = labels.map(function (l) { return l.split('_')[0] })
     var speciesCommon = labels.map(function (l) {

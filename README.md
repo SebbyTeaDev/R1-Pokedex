@@ -301,6 +301,14 @@ tfjs selecting different kernel paths (packing, im2col, tile sizes) under the
 r1's texture-size and capability limits. Different summation order, same
 precision.
 
+**NEARBY uses the RARE tier floor (0.02), not the model's noise floor.** At
+0.0025 the San Francisco list ran to 235 and its tail was Black-footed
+Albatross, Laysan Albatross, Eurasian Coot and Verdin — pelagic and desert
+birds nobody in the Mission will hear. 0.02 gives 143 there, ending at Allen's
+Hummingbird and Dunlin, which is a list you could actually work through. The
+lower tiers still exist and still label an individual detection; they just do
+not belong in "birds in your area".
+
 **Recommended: stop here and calibrate on-device.** The divergence is
 deterministic per device, so a threshold tuned on the r1 is exactly as good as
 knowing why. A layer-by-layer bisect (build sub-models with

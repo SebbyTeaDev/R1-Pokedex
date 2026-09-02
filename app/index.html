@@ -6,8 +6,8 @@
 <title>R1 Pokedex</title>
 <!-- Bump on every push. Pages sends Cache-Control: max-age=600, so relaunching
      within 10 minutes serves stale HTML and looks like a broken build. -->
-<meta name="build" content="c3">
-<script>window.__BUILD = "c3";</script>
+<meta name="build" content="c4">
+<script>window.__BUILD = "c4";</script>
 <style>
   /* Pokedex red is 3.81:1 on black — it FAILS WCAG AA as body text. So red is
      a band background and a fill, never small type; --red-txt is the 6.48:1
@@ -362,7 +362,7 @@ var yam = null, yamOn = true;
 var mode = 'single';        // 'monitor' routes results to the session list
 var YAM_KEY = 'pokedex_yam';
 var dex = {}, store = null, zip = null, nearby = null;
-var TAXA = {}, ZIP3 = {};
+var TAXA = {}, ZIP3 = {}, geoTiers = null;
 var view = 'boot', focus = 0;
 
 var TAXON_LONG  = { bird:'', amphibian:'AMPHIBIAN', insect:'INSECT', mammal:'MAMMAL' };
@@ -1177,8 +1177,21 @@ function renderMenu() {
   // own; the nearby number is the achievable one and the actual game.
   var m = document.createElement('div');
   m.className = 'hint';
-  m.textContent = 'caught ' + Object.keys(dex).length + ' of 6511' +
-    (nearby ? '\n' + countSeenNearby() + ' of ' + nearby.length + ' nearby this week' : '');
+  var txt = 'caught ' + Object.keys(dex).length + ' of 6511';
+  if (nearby) {
+    txt += '\n' + countSeenNearby() + ' of ' + nearby.length + ' nearby this week';
+    if (geoTiers) {
+      txt += '\ncommon ' + geoTiers.common + '  uncommon ' + geoTiers.uncommon +
+             '  rare ' + geoTiers.rare;
+    }
+    // Say plainly what the list is. The score is a REPORTING frequency, so the
+    // wording is "birders report", never "is rare" — Rock Pigeon reads rare in
+    // cities because nobody logs pigeons.
+    txt += '\nspecies birders report at ' + zip + ', week ' + week48() + '/48';
+  } else if (!zip) {
+    txt += '\nset a ZIP in CFG for a local list';
+  }
+  m.textContent = txt;
   l.appendChild(m);
   scrollFocusIntoView(l);
 }
@@ -1609,7 +1622,7 @@ function boot() {
     }
     if (d.message === 'geo_loading') { title('RANGE...'); return; }
     if (d.message === 'geo') {
-      nearby = d.nearby;
+      nearby = d.nearby; geoTiers = d.tiers;
       if (view === 'home') { title('POKEDEX'); renderHome(); }
       return;
     }
